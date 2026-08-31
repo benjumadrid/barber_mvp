@@ -1,0 +1,79 @@
+@import "tailwindcss";
+
+@layer base {
+  :root {
+    --font-sans: 'Plus Jakarta Sans', -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+    --font-heading: 'Cinzel', serif;
+  }
+
+  body {
+    font-family: var(--font-sans);
+    background-color: #F4EFEB;
+    color: #1E1915;
+    overflow-x: hidden;
+  }
+}
+
+/* Subtle Luxury Tone System */
+.bg-theme-main {
+  background-color: #F4EFEB;
+}
+
+.bg-theme-surface {
+  background-color: #FAF6F1;
+}
+
+.bg-theme-card {
+  background-color: #FFFFFF;
+}
+
+.border-theme-subtle {
+  border-color: #E6DDD1;
+}
+
+.border-theme-gold {
+  border-color: #E5A93C;
+}
+
+.text-theme-dark {
+  color: #1E1915;
+}
+
+.text-theme-muted {
+  color: #6E5D52;
+}
+
+.text-gold-rich {
+  color: #C88A22;
+}
+
+/* Soft Warm Shadows */
+.shadow-luxury-sm {
+  box-shadow: 0 2px 8px -1px rgba(60, 44, 30, 0.05), 0 1px 3px -1px rgba(60, 44, 30, 0.03);
+}
+
+.shadow-luxury-md {
+  box-shadow: 0 6px 20px -2px rgba(60, 44, 30, 0.07), 0 2px 6px -1px rgba(60, 44, 30, 0.04);
+}
+
+.shadow-luxury-lg {
+  box-shadow: 0 14px 34px -4px rgba(60, 44, 30, 0.10), 0 4px 10px -2px rgba(60, 44, 30, 0.05);
+}
+
+/* Custom Scrollbar */
+::-webkit-scrollbar {
+  width: 9px;
+}
+
+::-webkit-scrollbar-track {
+  background: #EFE9E2;
+}
+
+::-webkit-scrollbar-thumb {
+  background: #D5C8B8;
+  border-radius: 4px;
+}
+
+::-webkit-scrollbar-thumb:hover {
+  background: #C88A22;
+}
