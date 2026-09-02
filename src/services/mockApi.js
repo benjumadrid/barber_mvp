@@ -7,11 +7,11 @@
  * of these functions with fetch / axios calls without modifying the UI components.
  */
 
-import { MOCK_SERVICES } from '../data/servicesData';
-import { MOCK_BARBERS } from '../data/barbersData';
-import { MOCK_SHOP_INFO } from '../data/shopData';
-import { MOCK_GALLERY_IMAGES } from '../data/galleryData';
-import { MOCK_SOCIAL_POSTS } from '../data/socialProofData';
+import { MOCK_SERVICES } from '../data/servicesData.js';
+import { MOCK_BARBERS } from '../data/barbersData.js';
+import { MOCK_SHOP_INFO } from '../data/shopData.js';
+import { MOCK_GALLERY_IMAGES } from '../data/galleryData.js';
+import { MOCK_SOCIAL_POSTS } from '../data/socialProofData.js';
 
 // Simulated network latency helper (optional, default 100ms for snappy feel)
 const delay = (ms = 100) => new Promise(resolve => setTimeout(resolve, ms));
@@ -94,6 +94,7 @@ export async function getSocialPosts() {
 
 // ── Unified Booking API (Single Source of Truth) ──────────────────────
 import { 
+  APPOINTMENT_EDIT_WINDOW_MINUTES,
   bookSlot as storeBookSlot, 
   cancelBooking as storeCancelBooking, 
   updateAppointment as storeUpdateAppointment,
@@ -115,7 +116,7 @@ import {
   subscribeToBookingStore,
   notifyBookingStoreChange,
   loadBookedSlotsFromStorage,
-} from '../data/bookingStore';
+} from '../data/bookingStore.js';
 
 export {
   storeIsAppointmentPast as isAppointmentPast,
@@ -251,3 +252,5 @@ export async function setStaffBookingStatus(refOrId, newStatus) {
   await delay(30);
   return result;
 }
+
+export { APPOINTMENT_EDIT_WINDOW_MINUTES } from '../data/bookingStore.js';

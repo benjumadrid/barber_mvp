@@ -32,6 +32,7 @@ export const MOCK_SERVICES = [
 
 // ── Shop Constants & Configuration ─────────────────────────────────────
 export const SERVICE_DURATION_MINUTES = 60; // 1 hour per service for MVP
+export const APPOINTMENT_EDIT_WINDOW_MINUTES = 11; // Canonical 11-minute modification window
 export const SHOP_OPEN_MINUTES = 8 * 60;    // 8:00 AM (480 min)
 export const SHOP_CLOSE_MINUTES = 20 * 60;  // 8:00 PM (1200 min)
 
@@ -666,7 +667,7 @@ export function bookSlot(barberId, dateStr, timeId, customerInfo) {
   const barberObj = MOCK_BARBERS.find((b) => b.id === actualBarberId);
   const now = new Date();
   const createdAt = now.toISOString();
-  const editDeadline = new Date(now.getTime() + 10 * 60 * 1000).toISOString(); // exactly +10 minutes
+  const editDeadline = new Date(now.getTime() + APPOINTMENT_EDIT_WINDOW_MINUTES * 60 * 1000).toISOString(); // exactly +11 minutes
 
   const booking = {
     id: `appt-${Date.now()}`,
@@ -717,18 +718,18 @@ export function bookSlot(barberId, dateStr, timeId, customerInfo) {
   return { success: true, booking };
 }
 
-// ── Update Existing Appointment (With 10-Min Deadline & Slot Swapping) ──
+// ── Update Existing Appointment (With 11-Min Deadline & Slot Swapping) ──
 export function updateAppointment(appointmentId, newDetails) {
   const current = getActiveBooking();
   if (!current || (current.id !== appointmentId && current.ref !== appointmentId)) {
     return { success: false, error: 'Appointment not found.' };
   }
 
-  // Verify 10-minute edit deadline has not passed
+  // Verify 11-minute edit deadline has not passed
   const now = Date.now();
   const deadline = current.editDeadline ? new Date(current.editDeadline).getTime() : 0;
   if (deadline && now > deadline) {
-    return { success: false, error: 'The 10-minute editing window for this appointment has expired.' };
+    return { success: false, error: `The ${APPOINTMENT_EDIT_WINDOW_MINUTES}-minute editing window for this appointment has expired.` };
   }
 
   const oldBarberId = current.barberId || current.actualBarberId;

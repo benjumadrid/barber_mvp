@@ -42,6 +42,7 @@ import {
   getAppointmentLifecycle
 } from '../services/mockApi';
 import { 
+  APPOINTMENT_EDIT_WINDOW_MINUTES,
   formatDateKey, 
   formatDisplayDate,
   getActiveBooking,
@@ -73,7 +74,7 @@ export default function MyAppointmentPage() {
   const [editDate, setEditDate] = useState(null);
   const [editTimeId, setEditTimeId] = useState(null);
 
-  // ── Countdown timer for 10-minute editing window ──────────────
+  // ── Countdown timer for 11-minute editing window ──────────────
   const [currentTime, setCurrentTime] = useState(Date.now());
 
   useLayoutEffect(() => {
@@ -148,9 +149,9 @@ export default function MyAppointmentPage() {
     if (appointment.editDeadline) {
       deadlineMs = new Date(appointment.editDeadline).getTime();
     } else if (appointment.createdAt) {
-      deadlineMs = new Date(appointment.createdAt).getTime() + 10 * 60 * 1000;
+      deadlineMs = new Date(appointment.createdAt).getTime() + APPOINTMENT_EDIT_WINDOW_MINUTES * 60 * 1000;
     } else {
-      deadlineMs = currentTime + 10 * 60 * 1000;
+      deadlineMs = currentTime + APPOINTMENT_EDIT_WINDOW_MINUTES * 60 * 1000;
     }
 
     if (!deadlineMs || isNaN(deadlineMs)) return 0;
@@ -515,7 +516,7 @@ export default function MyAppointmentPage() {
           <div className="bg-gradient-to-r from-[#FAF4EA] to-[#FDF8EF] border border-[#E5A93C]/50 rounded-2xl p-4 flex items-center justify-between gap-3 mb-8 shadow-sm">
             <div className="flex items-center gap-2.5 text-xs text-[#8C4717] font-semibold">
               <Clock className="w-4 h-4 text-[#C88A22] flex-shrink-0 animate-pulse" />
-              <span>10-Minute Edit Window Active:</span>
+              <span>{APPOINTMENT_EDIT_WINDOW_MINUTES}-Minute Edit Window Active:</span>
               <span className="font-mono font-extrabold text-sm bg-white px-2.5 py-1 rounded-lg border border-[#EADBCA] text-[#1E1915] shadow-xs">
                 {formatCountdown(remainingEditSeconds)} remaining
               </span>
@@ -688,7 +689,7 @@ export default function MyAppointmentPage() {
           </span>
         </div>
 
-        {/* ── 10-Minute Live Modification Window Banner (Only while active) ── */}
+        {/* ── 11-Minute Live Modification Window Banner (Only while active) ── */}
         {!isPast && isEditWindowActive && (
           <div className="mb-5 bg-gradient-to-r from-[#FAF2E3] via-[#FDF8EF] to-[#FAF2E3] border-2 border-[#E5A93C] rounded-2xl p-4 shadow-luxury-sm flex flex-col sm:flex-row items-center justify-between gap-3 animate-[fadeIn_0.3s_ease-out]">
             <div className="flex items-center gap-3">
@@ -698,7 +699,7 @@ export default function MyAppointmentPage() {
               <div>
                 <div className="flex items-center gap-2">
                   <span className="text-[11px] font-extrabold uppercase tracking-wider text-[#8C4717]">
-                    10-Minute Edit Window Active
+                    {APPOINTMENT_EDIT_WINDOW_MINUTES}-Minute Edit Window Active
                   </span>
                   <span className="inline-flex items-center px-2 py-0.5 rounded-full bg-[#E5A93C]/25 text-[10px] font-bold text-[#8C4717] animate-pulse">
                     Live
@@ -1024,7 +1025,7 @@ export default function MyAppointmentPage() {
 
         {/* ── Main Appointment Actions & Payment Notice ────────── */}
         <div className="space-y-4">
-          {/* Edit Appointment Primary Action (Only while active and within 10 min) */}
+          {/* Edit Appointment Primary Action (Only while active and within 11 min) */}
           {!isPast && isEditWindowActive && (
             <button
               type="button"
