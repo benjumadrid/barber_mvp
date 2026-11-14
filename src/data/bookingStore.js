@@ -904,7 +904,7 @@ export function updateAppointment(appointmentId, newDetails) {
     adjustmentAmount = diff;
     remainingAmount = diff;
     paidAmount = isOriginalVerified ? totalVerifiedSoFar : 0;
-    paymentStatus = current.additionalPaymentStatus === 'Pending Verification'
+    paymentStatus = (newDetails.additionalReceiptPreview || newDetails.additionalPaymentStatus === 'Pending Verification' || current.additionalPaymentStatus === 'Pending Verification')
       ? 'Additional Payment Pending Verification'
       : (isOriginalVerified ? 'Additional Payment Due' : 'Verification Pending');
     refundAmount = 0;
@@ -978,8 +978,9 @@ export function updateAppointment(appointmentId, newDetails) {
     receiptFileName: current.originalReceiptFileName || current.receiptFileName || 'receipt.png',
     additionalReceiptPreview: newDetails.additionalReceiptPreview !== undefined ? newDetails.additionalReceiptPreview : (current.additionalReceiptPreview || null),
     additionalReceiptFileName: newDetails.additionalReceiptFileName !== undefined ? newDetails.additionalReceiptFileName : (current.additionalReceiptFileName || null),
-    additionalSubmittedAmount: newDetails.additionalSubmittedAmount !== undefined ? newDetails.additionalSubmittedAmount : (current.additionalSubmittedAmount || 0),
-    additionalPaymentStatus: newDetails.additionalPaymentStatus || current.additionalPaymentStatus || 'None',
+    additionalSubmittedAmount: newDetails.additionalSubmittedAmount !== undefined ? Number(newDetails.additionalSubmittedAmount) : (newDetails.additionalReceiptPreview ? diff : (Number(current.additionalSubmittedAmount) || 0)),
+    additionalPaymentStatus: newDetails.additionalPaymentStatus || (newDetails.additionalReceiptPreview ? 'Pending Verification' : (current.additionalPaymentStatus || 'None')),
+    additionalPaymentSubmittedAt: newDetails.additionalReceiptPreview ? new Date().toISOString() : (current.additionalPaymentSubmittedAt || null),
 
     verifiedOriginalAmount: verifiedOriginal,
     verifiedAdditionalAmount: verifiedAdditional,

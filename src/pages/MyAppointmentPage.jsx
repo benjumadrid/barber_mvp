@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useLayoutEffect, useCallback } from 'react';
+import React, { useState, useEffect, useLayoutEffect, useCallback, useRef } from 'react';
 import { Link, useLocation } from 'react-router-dom';
 import { 
   Scissors, 
@@ -80,6 +80,14 @@ export default function MyAppointmentPage() {
   const [editTimeId, setEditTimeId] = useState(null);
   const [editRefundMethod, setEditRefundMethod] = useState('telebirr');
   const [editRefundAccount, setEditRefundAccount] = useState('');
+
+  // ── Mandatory Upgrade Payment Receipt Upload State (in edit mode) ────
+  const [editAdditionalReceiptFile, setEditAdditionalReceiptFile] = useState(null);
+  const [editAdditionalReceiptPreview, setEditAdditionalReceiptPreview] = useState(null);
+  const [editCopiedAccountKey, setEditCopiedAccountKey] = useState(null);
+  const [isScanningEditReceipt, setIsScanningEditReceipt] = useState(false);
+  const [showEditReceiptPreviewModal, setShowEditReceiptPreviewModal] = useState(false);
+  const editFileInputRef = useRef(null);
 
   // ── Additional Payment Receipt Upload State ───────────────────
   const [showAdditionalReceiptModal, setShowAdditionalReceiptModal] = useState(false);
@@ -207,6 +215,88 @@ export default function MyAppointmentPage() {
     document.body.removeChild(link);
   };
 
+  // ── Copy Edit Account Helper ──────────────────────────────────
+  const handleCopyEditAccount = (text, key) => {
+    try {
+      navigator.clipboard.writeText(text);
+      setEditCopiedAccountKey(key);
+      setTimeout(() => setEditCopiedAccountKey(null), 2000);
+    } catch (e) {}
+  };
+
+  // ── Edit Additional Receipt File Handler ──────────────────────
+  const handleEditFileSelect = (e) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+    setEditError('');
+
+    const validTypes = ['image/jpeg', 'image/jpg', 'image/png', 'image/webp'];
+    if (!validTypes.includes(file.type.toLowerCase())) {
+      setEditError('Please upload an image file (JPG, PNG, or WEBP) for your upgrade payment receipt.');
+      return;
+    }
+
+    if (file.size > 5 * 1024 * 1024) {
+      setEditError('Image size exceeds 5MB. Please choose a smaller file.');
+      return;
+    }
+
+    setIsScanningEditReceipt(true);
+    setEditAdditionalReceiptFile(file);
+
+    const reader = new FileReader();
+    reader.onload = (evt) => {
+      const rawDataUrl = evt.target.result;
+      if (typeof window === 'undefined' || !window.Image) {
+        setEditAdditionalReceiptPreview(rawDataUrl);
+        setIsScanningEditReceipt(false);
+        return;
+      }
+
+      const img = new Image();
+      img.onload = () => {
+        const maxDimension = 1800;
+        let width = img.width;
+        let height = img.height;
+
+        if (width > maxDimension || height > maxDimension) {
+          if (width > height) {
+            height = Math.round((height * maxDimension) / width);
+            width = maxDimension;
+          } else {
+            width = Math.round((width * maxDimension) / height);
+            height = maxDimension;
+          }
+        }
+
+        try {
+          const canvas = document.createElement('canvas');
+          canvas.width = width;
+          canvas.height = height;
+          const ctx = canvas.getContext('2d');
+          ctx.imageSmoothingEnabled = true;
+          ctx.imageSmoothingQuality = 'high';
+          ctx.drawImage(img, 0, 0, width, height);
+          const compressedDataUrl = canvas.toDataURL('image/jpeg', 0.88);
+          setEditAdditionalReceiptPreview(compressedDataUrl);
+        } catch (err) {
+          setEditAdditionalReceiptPreview(rawDataUrl);
+        }
+        setIsScanningEditReceipt(false);
+      };
+      img.onerror = () => {
+        setEditAdditionalReceiptPreview(rawDataUrl);
+        setIsScanningEditReceipt(false);
+      };
+      img.src = rawDataUrl;
+    };
+    reader.onerror = () => {
+      setEditError('Failed to read receipt image file.');
+      setIsScanningEditReceipt(false);
+    };
+    reader.readAsDataURL(file);
+  };
+
   // ── Start Editing ─────────────────────────────────────────────
   const handleStartEditing = () => {
     if (!isEditWindowActive) return;
@@ -224,6 +314,9 @@ export default function MyAppointmentPage() {
     setEditRefundMethod(appointment.refundMethod || 'telebirr');
     setEditRefundAccount(appointment.refundAccount || '');
     setEditError('');
+    setEditAdditionalReceiptFile(null);
+    setEditAdditionalReceiptPreview(null);
+    setShowEditReceiptPreviewModal(false);
     setIsEditing(true);
     window.scrollTo({ top: 0, behavior: 'smooth' });
   };
@@ -231,6 +324,9 @@ export default function MyAppointmentPage() {
   const handleCancelEditing = () => {
     setIsEditing(false);
     setEditError('');
+    setEditAdditionalReceiptFile(null);
+    setEditAdditionalReceiptPreview(null);
+    setShowEditReceiptPreviewModal(false);
   };
 
   // ── Confirm Edit Changes ──────────────────────────────────────
@@ -241,13 +337,20 @@ export default function MyAppointmentPage() {
     }
 
     const newService = MOCK_SERVICES.find(s => s.id === editServiceId);
-    const isOriginalVerified = appointment.paymentStatus === 'Verified' || (Number(appointment.paidAmount) > 0);
-    const verifiedPaid = isOriginalVerified 
-      ? (appointment.paidAmount !== undefined ? Number(appointment.paidAmount) : (Number(appointment.price) || 0))
-      : 0;
     const newPrice = newService?.price || 0;
-    const baselinePrice = appointment.originalPrice || appointment.price || (isOriginalVerified ? verifiedPaid : 400);
+    const baselinePrice = Number(appointment.originalPrice) || Number(appointment.price) || 400;
     const priceDiff = newPrice - baselinePrice;
+
+    // MANDATORY PROOF CHECK FOR UPGRADES:
+    // If the customer chose a more expensive service (priceDiff > 0), they MUST attach their 2nd receipt before completing the edit!
+    if (priceDiff > 0 && !editAdditionalReceiptPreview) {
+      setEditError(`Please attach your payment receipt screenshot for the +${priceDiff} ETB difference before completing your service upgrade.`);
+      const uploadEl = document.getElementById('edit-receipt-upload-section');
+      if (uploadEl) {
+        uploadEl.scrollIntoView({ behavior: 'smooth', block: 'center' });
+      }
+      return;
+    }
 
     setIsUpdating(true);
     setEditError('');
@@ -268,6 +371,12 @@ export default function MyAppointmentPage() {
       price: newPrice,
       refundMethod: null,
       refundAccount: null,
+      ...(priceDiff > 0 && editAdditionalReceiptPreview ? {
+        additionalReceiptPreview: editAdditionalReceiptPreview,
+        additionalReceiptFileName: editAdditionalReceiptFile?.name || 'upgrade_receipt.png',
+        additionalSubmittedAmount: priceDiff,
+        additionalPaymentStatus: 'Pending Verification',
+      } : {})
     };
 
     const res = await updateAppointment(appointment.id || appointment.ref, updatePayload);
@@ -276,6 +385,9 @@ export default function MyAppointmentPage() {
       setAppointment(res.appointment);
       setIsEditing(false);
       setIsUpdating(false);
+      setEditAdditionalReceiptFile(null);
+      setEditAdditionalReceiptPreview(null);
+      setShowEditReceiptPreviewModal(false);
       window.scrollTo({ top: 0, behavior: 'smooth' });
     } else {
       setEditError(res.error || 'Unable to update appointment. Please choose another time slot.');
@@ -595,12 +707,9 @@ export default function MyAppointmentPage() {
     const currentService = MOCK_SERVICES.find(s => s.id === (appointment.serviceId || 'srv-1'));
     const newService = MOCK_SERVICES.find(s => s.id === editServiceId);
     
-    const isOriginalVerified = appointment.paymentStatus === 'Verified' || (Number(appointment.paidAmount) > 0);
-    const verifiedPaid = isOriginalVerified 
-      ? (appointment.paidAmount !== undefined ? Number(appointment.paidAmount) : (Number(appointment.price) || 0))
-      : 0;
     const newPrice = newService?.price || 0;
-    const priceDiff = isOriginalVerified ? (newPrice - verifiedPaid) : 0;
+    const baselinePrice = Number(appointment.originalPrice) || Number(appointment.price) || 400;
+    const priceDiff = newPrice - baselinePrice;
 
     const currentBarber = MOCK_BARBERS.find(b => b.id === (appointment.barberId || appointment.actualBarberId));
     const newBarber = MOCK_BARBERS.find(b => b.id === editBarberId);
@@ -725,9 +834,9 @@ export default function MyAppointmentPage() {
                 </div>
               </div>
 
-              {/* Price adjustment notice */}
+              {/* Price adjustment notice & mandatory upgrade payment */}
               {priceDiff < 0 ? (
-                <div className="p-4 rounded-2xl bg-emerald-50 border-2 border-emerald-400/80 text-left space-y-2 shadow-xs">
+                <div className="p-4 sm:p-5 rounded-2xl bg-emerald-50 border-2 border-emerald-400/80 text-left space-y-2.5 shadow-xs">
                   <div className="flex items-center gap-2 text-xs font-black uppercase text-emerald-950 font-['Cinzel',serif] tracking-wide">
                     <CheckCircle2 className="w-4 h-4 text-emerald-600 flex-shrink-0" />
                     <span>Service Downgrade — Cash Change Due at Shop</span>
@@ -735,10 +844,10 @@ export default function MyAppointmentPage() {
                   <p className="text-xs text-emerald-900 leading-relaxed font-medium">
                     New total: <strong className="text-[#1E1915]">{newPrice} ETB</strong> · Original service: <strong className="text-[#1E1915]">{baselinePrice} ETB</strong> (Price Difference: <strong>{Math.abs(priceDiff)} ETB</strong>).
                   </p>
-                  <div className="bg-white/95 border border-emerald-300 p-3 rounded-xl text-xs font-bold text-emerald-950 flex items-start gap-2 shadow-xs">
+                  <div className="bg-white/95 border border-emerald-300 p-3.5 rounded-xl text-xs font-bold text-emerald-950 flex items-start gap-2.5 shadow-xs">
                     <span className="text-base flex-shrink-0">💵</span>
                     <span className="leading-snug">
-                      You will receive your <strong>{Math.abs(priceDiff)} ETB</strong> change in cash in person when you go to get your haircut at Nhatty Barber House (Lucy Hotel, Ground Floor).
+                      No payment attachment required! You will receive your <strong>{Math.abs(priceDiff)} ETB</strong> change in physical cash when you arrive at Nhatty Barber House (Lucy Hotel, Ground Floor).
                     </span>
                   </div>
                   <p className="text-[10.5px] text-emerald-700 font-semibold">
@@ -750,19 +859,158 @@ export default function MyAppointmentPage() {
                   <Check className="w-4 h-4 text-emerald-600 flex-shrink-0" />
                   <div>
                     <span className="block font-bold">New total: {newPrice} ETB</span>
-                    <span className="text-[11px] font-normal text-emerald-700">Same service price. No additional payment or refund required.</span>
+                    <span className="text-[11px] font-normal text-emerald-700">Same service price. No additional payment or receipt attachment required.</span>
                   </div>
                 </div>
               ) : (
-                <div className="flex items-start gap-2.5 text-xs text-[#8C4717] font-semibold bg-[#FAF4EA] border border-[#EADBCA] p-3.5 rounded-xl">
-                  <Info className="w-4 h-4 text-[#C88A22] flex-shrink-0 mt-0.5" />
-                  <div>
-                    <span className="block font-bold text-sm text-[#1E1915]">New total: {newPrice} ETB</span>
-                    <span className="block text-[#6E5D52] mt-0.5">Original service: {baselinePrice} ETB</span>
-                    <span className="block font-extrabold text-[#C88A22] mt-1">Additional payment required: +{priceDiff} ETB</span>
-                    <span className="text-[11px] font-normal text-[#6E5D52] mt-0.5 block">
-                      Your original payment is preserved. Settle the remaining {priceDiff} ETB at Lucy Hotel front desk.
-                    </span>
+                <div id="edit-receipt-upload-section" className="rounded-2xl border-2 border-[#E5A93C]/80 bg-[#FAF4EA]/80 p-4 sm:p-5 text-left space-y-4 shadow-sm animate-[fadeIn_0.3s_ease-out]">
+                  {/* Header & Math */}
+                  <div className="flex items-start justify-between gap-3 flex-wrap">
+                    <div>
+                      <div className="flex items-center gap-1.5 text-xs font-black uppercase text-[#8C4717] font-['Cinzel',serif] tracking-wide">
+                        <CreditCard className="w-4 h-4 text-[#C88A22]" />
+                        <span>Service Upgrade — Additional Payment Due</span>
+                      </div>
+                      <p className="text-xs text-[#6E5D52] mt-0.5">
+                        New total: <strong className="text-[#1E1915]">{newPrice} ETB</strong> · Previous payment: <strong className="text-[#1E1915]">{baselinePrice} ETB</strong>
+                      </p>
+                    </div>
+                    <div className="bg-white border border-[#E5A93C]/60 px-3.5 py-1.5 rounded-xl text-right shadow-xs">
+                      <span className="text-[10px] font-bold text-[#8C4717] uppercase block">Remaining Balance</span>
+                      <span className="text-base font-black text-[#1E1915] font-mono">+{priceDiff} <span className="text-xs text-[#C88A22]">ETB</span></span>
+                    </div>
+                  </div>
+
+                  {/* Payment Instructions & Account Details */}
+                  <div className="bg-white/95 border border-[#E5A93C]/40 rounded-xl p-3.5 space-y-2.5">
+                    <div className="flex items-center gap-2 text-xs font-bold text-[#1E1915]">
+                      <span className="flex-shrink-0 text-base">💳</span>
+                      <span>Transfer the remaining <strong className="text-[#8C4717]">+{priceDiff} ETB</strong> to either account below:</span>
+                    </div>
+
+                    <div className="grid grid-cols-1 sm:grid-cols-2 gap-2.5 pt-1">
+                      {/* CBE Card */}
+                      <div className="bg-[#FAF6F1] border border-[#E6DDD1] rounded-xl p-2.5 space-y-1">
+                        <div className="flex items-center justify-between">
+                          <span className="text-[11px] font-extrabold text-[#582C83]">CBE Bank</span>
+                          <button
+                            type="button"
+                            onClick={() => handleCopyEditAccount('1000123456872', 'cbe')}
+                            className="inline-flex items-center gap-1 text-[10px] font-bold px-2 py-0.5 bg-white border border-[#D5C7B5] rounded hover:text-[#C88A22] transition-colors"
+                          >
+                            {editCopiedAccountKey === 'cbe' ? <Check className="w-3 h-3 text-emerald-600" /> : <Copy className="w-3 h-3" />}
+                            <span>{editCopiedAccountKey === 'cbe' ? 'Copied' : 'Copy'}</span>
+                          </button>
+                        </div>
+                        <p className="text-[10px] text-[#6E5D52]">Name: <strong className="text-[#1E1915]">NHATTY BARBER</strong></p>
+                        <p className="text-xs font-mono font-bold text-[#1E1915]">1000123456872</p>
+                      </div>
+
+                      {/* Telebirr Card */}
+                      <div className="bg-[#FAF6F1] border border-[#E6DDD1] rounded-xl p-2.5 space-y-1">
+                        <div className="flex items-center justify-between">
+                          <span className="text-[11px] font-extrabold text-[#00A3E0]">Telebirr</span>
+                          <button
+                            type="button"
+                            onClick={() => handleCopyEditAccount('0911234567', 'telebirr')}
+                            className="inline-flex items-center gap-1 text-[10px] font-bold px-2 py-0.5 bg-white border border-[#D5C7B5] rounded hover:text-[#C88A22] transition-colors"
+                          >
+                            {editCopiedAccountKey === 'telebirr' ? <Check className="w-3 h-3 text-emerald-600" /> : <Copy className="w-3 h-3" />}
+                            <span>{editCopiedAccountKey === 'telebirr' ? 'Copied' : 'Copy'}</span>
+                          </button>
+                        </div>
+                        <p className="text-[10px] text-[#6E5D52]">Name: <strong className="text-[#1E1915]">NHATTY BARBER</strong></p>
+                        <p className="text-xs font-mono font-bold text-[#1E1915]">0911234567</p>
+                      </div>
+                    </div>
+                  </div>
+
+                  {/* Mandatory Receipt Upload Box */}
+                  <div className="space-y-2">
+                    <div className="flex items-center justify-between">
+                      <label className="text-xs font-extrabold text-[#1E1915] flex items-center gap-1.5">
+                        <UploadCloud className="w-4 h-4 text-[#C88A22]" />
+                        <span>Attach Payment Receipt (+{priceDiff} ETB) <span className="text-red-500">*</span></span>
+                      </label>
+                      <span className="text-[10px] font-semibold text-[#8C4717] uppercase tracking-wide">Required before confirming</span>
+                    </div>
+
+                    <input
+                      ref={editFileInputRef}
+                      type="file"
+                      accept="image/jpeg,image/jpg,image/png,image/webp"
+                      onChange={handleEditFileSelect}
+                      className="hidden"
+                    />
+
+                    {editAdditionalReceiptPreview ? (
+                      <div className="bg-white border-2 border-emerald-500/80 rounded-2xl p-3.5 flex items-center justify-between gap-3 shadow-xs">
+                        <div className="flex items-center gap-3 min-w-0">
+                          <div className="relative w-12 h-12 rounded-xl overflow-hidden border border-emerald-300 bg-gray-100 flex-shrink-0">
+                            <img
+                              src={editAdditionalReceiptPreview}
+                              alt="Upgrade payment receipt"
+                              className="w-full h-full object-cover cursor-pointer hover:opacity-90"
+                              onClick={() => setShowEditReceiptPreviewModal(true)}
+                            />
+                          </div>
+                          <div className="min-w-0">
+                            <div className="flex items-center gap-1.5">
+                              <CheckCircle2 className="w-3.5 h-3.5 text-emerald-600 flex-shrink-0" />
+                              <span className="text-xs font-bold text-emerald-950 truncate">Receipt Attached (+{priceDiff} ETB)</span>
+                            </div>
+                            <p className="text-[11px] text-[#6E5D52] truncate">
+                              {editAdditionalReceiptFile?.name || 'upgrade_receipt.png'}
+                            </p>
+                          </div>
+                        </div>
+                        <div className="flex items-center gap-2 flex-shrink-0">
+                          <button
+                            type="button"
+                            onClick={() => setShowEditReceiptPreviewModal(true)}
+                            className="text-[11px] font-bold text-[#1E1915] bg-[#FAF4EA] hover:bg-[#F2E5D0] px-2.5 py-1.5 rounded-lg border border-[#E5A93C]/40 transition-colors cursor-pointer"
+                          >
+                            Inspect
+                          </button>
+                          <button
+                            type="button"
+                            onClick={() => {
+                              setEditAdditionalReceiptFile(null);
+                              setEditAdditionalReceiptPreview(null);
+                            }}
+                            className="text-[11px] font-bold text-red-600 hover:text-red-800 bg-red-50 px-2.5 py-1.5 rounded-lg border border-red-200 transition-colors cursor-pointer"
+                          >
+                            Remove
+                          </button>
+                        </div>
+                      </div>
+                    ) : (
+                      <div
+                        onClick={() => editFileInputRef.current?.click()}
+                        className="border-2 border-dashed border-[#E5A93C]/80 hover:border-[#C88A22] bg-white hover:bg-[#FDFBF7] rounded-2xl p-5 text-center cursor-pointer transition-all shadow-xs group"
+                      >
+                        {isScanningEditReceipt ? (
+                          <div className="flex flex-col items-center justify-center gap-2 py-2">
+                            <Loader2 className="w-6 h-6 text-[#C88A22] animate-spin" />
+                            <span className="text-xs font-bold text-[#1E1915]">Optimizing receipt image...</span>
+                          </div>
+                        ) : (
+                          <div className="flex flex-col items-center justify-center gap-2">
+                            <div className="w-10 h-10 rounded-xl bg-[#FAF2E3] group-hover:bg-[#F5E6CC] flex items-center justify-center transition-colors">
+                              <UploadCloud className="w-5 h-5 text-[#C88A22]" />
+                            </div>
+                            <div>
+                              <p className="text-xs font-extrabold text-[#1E1915]">
+                                Click to Upload Upgrade Payment Screenshot (+{priceDiff} ETB)
+                              </p>
+                              <p className="text-[11px] text-[#8C4717] font-medium mt-0.5">
+                                JPG, PNG, or WEBP (Max 5MB) • Must attach receipt before completing edit
+                              </p>
+                            </div>
+                          </div>
+                        )}
+                      </div>
+                    )}
                   </div>
                 </div>
               )}
@@ -774,12 +1022,26 @@ export default function MyAppointmentPage() {
                 type="button"
                 onClick={handleSaveEdit}
                 disabled={isUpdating}
-                className="flex-1 flex items-center justify-center gap-2 py-4 px-6 rounded-2xl font-extrabold text-sm tracking-wide bg-gradient-to-r from-[#E5A93C] via-[#DF9C2F] to-[#D97706] text-[#1A1614] shadow-lg shadow-[#E5A93C]/25 hover:shadow-[#E5A93C]/40 hover:brightness-105 active:scale-[0.98] transition-all cursor-pointer"
+                className={`flex-1 flex items-center justify-center gap-2 py-4 px-6 rounded-2xl font-extrabold text-sm tracking-wide shadow-lg transition-all cursor-pointer ${
+                  priceDiff > 0 && !editAdditionalReceiptPreview
+                    ? 'bg-gradient-to-r from-amber-400 to-[#E5A93C] text-[#1A1614] hover:brightness-105 active:scale-[0.98]'
+                    : 'bg-gradient-to-r from-[#E5A93C] via-[#DF9C2F] to-[#D97706] text-[#1A1614] shadow-[#E5A93C]/25 hover:shadow-[#E5A93C]/40 hover:brightness-105 active:scale-[0.98]'
+                }`}
               >
                 {isUpdating ? (
                   <>
                     <Loader2 className="w-4 h-4 animate-spin" />
                     <span>UPDATING RESERVATION...</span>
+                  </>
+                ) : priceDiff > 0 ? (
+                  <>
+                    <span>{editAdditionalReceiptPreview ? `CONFIRM UPGRADE (+${priceDiff} ETB ATTACHED)` : `ATTACH RECEIPT TO CONFIRM (+${priceDiff} ETB)`}</span>
+                    <ArrowRight className="w-4 h-4 stroke-[3]" />
+                  </>
+                ) : priceDiff < 0 ? (
+                  <>
+                    <span>CONFIRM SERVICE CHANGE (GET {Math.abs(priceDiff)} ETB CHANGE)</span>
+                    <ArrowRight className="w-4 h-4 stroke-[3]" />
                   </>
                 ) : (
                   <>
@@ -1628,6 +1890,17 @@ export default function MyAppointmentPage() {
               </div>
             </div>
           </div>
+        )}
+
+        {/* Edit Upgrade Receipt Preview Modal */}
+        {showEditReceiptPreviewModal && editAdditionalReceiptPreview && (
+          <ReceiptZoomViewer
+            imageUrl={editAdditionalReceiptPreview}
+            altText="Upgrade Payment Receipt"
+            title="Attached Upgrade Receipt Preview"
+            subtitle={`Attached payment receipt for service upgrade`}
+            onClose={() => setShowEditReceiptPreviewModal(false)}
+          />
         )}
 
       </div>
