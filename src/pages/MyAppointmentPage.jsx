@@ -516,7 +516,7 @@ export default function MyAppointmentPage() {
   const isPast = isAppointmentPast(appointment, currentTime);
 
   // ── 1. Empty State (Only when no appointment record exists in storage) ──
-  if (!appointment) {
+  if (!appointment || !appointment.ref) {
     return (
       <div className="min-h-screen bg-[#F4EFEB] pt-24 pb-20 px-4 sm:px-6">
         <div className="max-w-md mx-auto text-center">
