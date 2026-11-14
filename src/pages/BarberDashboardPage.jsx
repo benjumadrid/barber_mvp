@@ -436,33 +436,48 @@ export default function BarberDashboardPage() {
     if (!rejectModalAppt || !rejectReason.trim()) return;
     setIsRejecting(true);
     try {
-      const targetId = rejectModalAppt.id || rejectModalAppt.ref || `${rejectModalAppt.barberId}:${rejectModalAppt.dateStr}:${rejectModalAppt.timeId}`;
+      const targetId = rejectModalAppt.ref || rejectModalAppt.id || `${rejectModalAppt.barberId}:${rejectModalAppt.dateStr}:${rejectModalAppt.timeId}`;
+      const staffName = session?.name || 'Nhatty Staff Admin';
       const res = await rejectPaymentReceipt(targetId, {
         reason: rejectReason.trim(),
         target: rejectTarget,
-        staffName: staffSession?.name || 'Staff Admin'
+        staffName
       });
 
-      if (res.success && res.appointment) {
-        setAppointments(prev => prev.map(a => 
-          (a.id === targetId || a.ref === targetId || (a.barberId === res.appointment.barberId && a.dateStr === res.appointment.dateStr && a.timeId === res.appointment.timeId))
-            ? res.appointment 
-            : a
-        ));
-        setAllAppointments(prev => prev.map(a => 
-          (a.id === targetId || a.ref === targetId || (a.barberId === res.appointment.barberId && a.dateStr === res.appointment.dateStr && a.timeId === res.appointment.timeId))
-            ? res.appointment 
-            : a
-        ));
-        if (activeReceiptModal) {
-          setActiveReceiptModal(res.appointment);
-        }
-        setRejectSuccessToast(`Receipt rejected for ${res.appointment.ref || 'reservation'}. Reason sent to customer!`);
-        setTimeout(() => setRejectSuccessToast(''), 4500);
+      const updatedAppt = (res && res.appointment) ? res.appointment : {
+        ...rejectModalAppt,
+        paymentStatus: rejectTarget === 'additional' ? 'Additional Receipt Rejected' : 'Receipt Rejected',
+        originalPaymentStatus: 'Rejected',
+        additionalPaymentStatus: rejectTarget === 'additional' ? 'Rejected' : rejectModalAppt.additionalPaymentStatus,
+        rejectionReason: rejectReason.trim(),
+        rejectionTarget: rejectTarget,
+        rejectedAt: new Date().toISOString(),
+        rejectedBy: staffName,
+        paidAmount: 0,
+        amountPaid: 0,
+        verifiedOriginalAmount: 0,
+        verifiedAdditionalAmount: 0
+      };
+
+      setAppointments(prev => prev.map(a => 
+        (a.id === targetId || a.ref === targetId || a.ref === rejectModalAppt.ref || (a.barberId === rejectModalAppt.barberId && a.dateStr === rejectModalAppt.dateStr && a.timeId === rejectModalAppt.timeId))
+          ? updatedAppt 
+          : a
+      ));
+      setAllAppointments(prev => prev.map(a => 
+        (a.id === targetId || a.ref === targetId || a.ref === rejectModalAppt.ref || (a.barberId === rejectModalAppt.barberId && a.dateStr === rejectModalAppt.dateStr && a.timeId === rejectModalAppt.timeId))
+          ? updatedAppt 
+          : a
+      ));
+      if (activeReceiptModal) {
+        setActiveReceiptModal(updatedAppt);
       }
+      setRejectSuccessToast(`Receipt rejected for ${rejectModalAppt.ref || 'reservation'}. Rejection message sent to customer!`);
+      setTimeout(() => setRejectSuccessToast(''), 4500);
       setRejectModalAppt(null);
     } catch (err) {
       console.error('Error rejecting receipt:', err);
+      alert('Could not send rejection message: ' + (err?.message || 'Unknown error'));
     } finally {
       setIsRejecting(false);
     }
@@ -2225,38 +2240,39 @@ export default function BarberDashboardPage() {
         );
       })()}
 
-      {/* ── Receipt Rejection Reason Modal ────────────────────── */}
+      {/* ── Receipt Rejection Reason Modal (Styled to match Nhatty Warm Luxury Cards) ── */}
       {rejectModalAppt && (
-        <div className="fixed inset-0 z-[70] bg-black/85 backdrop-blur-sm flex items-center justify-center p-3 sm:p-4 animate-[fadeIn_0.2s_ease-out]">
-          <div className="bg-[#1C1714] text-white border-2 border-rose-500/70 rounded-3xl max-w-lg w-full p-5 sm:p-6 space-y-4 shadow-2xl relative">
+        <div className="fixed inset-0 z-[70] bg-black/60 backdrop-blur-sm flex items-center justify-center p-3 sm:p-4 animate-[fadeIn_0.2s_ease-out]">
+          <div className="bg-[#FDFBF7] text-[#1E1915] border border-[#E5A93C]/50 ring-1 ring-[#E5A93C]/20 rounded-3xl max-w-lg w-full p-5 sm:p-6 space-y-4 shadow-2xl shadow-stone-900/25 relative">
             {/* Header */}
-            <div className="flex items-start justify-between gap-3 border-b border-white/10 pb-3">
-              <div className="flex items-center gap-2.5">
-                <div className="w-10 h-10 rounded-xl bg-rose-500/20 border border-rose-500/40 flex items-center justify-center text-rose-400 flex-shrink-0">
-                  <Ban className="w-5 h-5 stroke-[2.5]" />
+            <div className="flex items-start justify-between gap-3 border-b border-[#E6DDD1] pb-3.5">
+              <div className="flex items-center gap-3">
+                <div className="w-10 h-10 rounded-2xl bg-[#FAF2E3] border border-[#E5A93C]/50 flex items-center justify-center text-[#8C4717] shadow-xs flex-shrink-0">
+                  <Ban className="w-5 h-5 text-rose-700 stroke-[2.5]" />
                 </div>
                 <div>
-                  <h3 className="text-sm sm:text-base font-extrabold uppercase font-['Cinzel',serif] tracking-wider text-white">
+                  <h3 className="text-base sm:text-lg font-black uppercase font-['Cinzel',serif] tracking-wider text-[#1E1915]">
                     Reject Payment Receipt
                   </h3>
-                  <p className="text-xs text-[#C5B9AB]">
-                    Ref: <span className="font-mono font-bold text-[#E5A93C]">{rejectModalAppt.ref}</span> • {rejectModalAppt.customerName || rejectModalAppt.name}
+                  <p className="text-xs text-[#6E5D52] font-mono mt-0.5">
+                    Ref: <span className="font-mono font-bold text-[#8C4717]">{rejectModalAppt.ref}</span> • {rejectModalAppt.customerName || rejectModalAppt.name}
                   </p>
                 </div>
               </div>
               <button
                 type="button"
                 onClick={() => setRejectModalAppt(null)}
-                className="p-1.5 rounded-lg text-white/60 hover:text-white hover:bg-white/10 transition-colors cursor-pointer"
+                className="p-1.5 rounded-xl text-[#8C7A6D] hover:text-[#1E1915] hover:bg-[#FAF2E3] transition-colors cursor-pointer"
+                title="Close rejection dialog"
               >
                 <X className="w-5 h-5" />
               </button>
             </div>
 
-            {/* Target Selector (if appointment has both receipts) */}
+            {/* Target Selector (if appointment has dual receipts) */}
             {(rejectModalAppt.additionalReceiptPreview || rejectModalAppt.additionalSubmittedAmount > 0) && (
               <div className="space-y-1.5 text-left">
-                <label className="text-[11px] font-bold uppercase tracking-wider text-[#C5B9AB] block">
+                <label className="text-[11px] font-black uppercase tracking-wider text-[#8C4717] block font-mono">
                   Select Receipt to Reject:
                 </label>
                 <div className="grid grid-cols-3 gap-2 text-xs">
@@ -2265,8 +2281,8 @@ export default function BarberDashboardPage() {
                     onClick={() => setRejectTarget('all')}
                     className={`py-2 px-2 rounded-xl font-bold border transition-all cursor-pointer ${
                       rejectTarget === 'all'
-                        ? 'bg-rose-600 text-white border-rose-500 shadow-sm'
-                        : 'bg-white/5 text-white/70 border-white/10 hover:bg-white/10'
+                        ? 'bg-[#140F0C] text-[#FAF6F1] border-[#E5A93C] shadow-xs font-black'
+                        : 'bg-[#FAF6F1] text-[#6E5D52] border-[#E6DDD1] hover:border-[#E5A93C]'
                     }`}
                   >
                     Both Receipts
@@ -2276,8 +2292,8 @@ export default function BarberDashboardPage() {
                     onClick={() => setRejectTarget('original')}
                     className={`py-2 px-2 rounded-xl font-bold border transition-all cursor-pointer ${
                       rejectTarget === 'original'
-                        ? 'bg-rose-600 text-white border-rose-500 shadow-sm'
-                        : 'bg-white/5 text-white/70 border-white/10 hover:bg-white/10'
+                        ? 'bg-[#140F0C] text-[#FAF6F1] border-[#E5A93C] shadow-xs font-black'
+                        : 'bg-[#FAF6F1] text-[#6E5D52] border-[#E6DDD1] hover:border-[#E5A93C]'
                     }`}
                   >
                     Original Only
@@ -2287,8 +2303,8 @@ export default function BarberDashboardPage() {
                     onClick={() => setRejectTarget('additional')}
                     className={`py-2 px-2 rounded-xl font-bold border transition-all cursor-pointer ${
                       rejectTarget === 'additional'
-                        ? 'bg-rose-600 text-white border-rose-500 shadow-sm'
-                        : 'bg-white/5 text-white/70 border-white/10 hover:bg-white/10'
+                        ? 'bg-[#140F0C] text-[#FAF6F1] border-[#E5A93C] shadow-xs font-black'
+                        : 'bg-[#FAF6F1] text-[#6E5D52] border-[#E6DDD1] hover:border-[#E5A93C]'
                     }`}
                   >
                     Additional Only
@@ -2299,7 +2315,7 @@ export default function BarberDashboardPage() {
 
             {/* Quick Preset Reasons */}
             <div className="space-y-1.5 text-left">
-              <label className="text-[11px] font-bold uppercase tracking-wider text-[#C5B9AB] block">
+              <label className="text-[11px] font-black uppercase tracking-wider text-[#8C4717] block font-mono">
                 Select Common Reason (1-Click):
               </label>
               <div className="flex flex-wrap gap-1.5">
@@ -2308,10 +2324,10 @@ export default function BarberDashboardPage() {
                     key={r}
                     type="button"
                     onClick={() => setRejectReason(r)}
-                    className={`text-[10.5px] py-1 px-2.5 rounded-lg border transition-all text-left cursor-pointer ${
+                    className={`text-[11px] py-1.5 px-3 rounded-xl border transition-all text-left cursor-pointer ${
                       rejectReason === r
-                        ? 'bg-rose-500/30 text-rose-200 border-rose-400 font-bold'
-                        : 'bg-white/5 text-white/70 border-white/10 hover:bg-white/10 hover:text-white'
+                        ? 'bg-[#FAF2E3] text-[#8C4717] border-2 border-[#E5A93C] font-black shadow-xs ring-1 ring-[#E5A93C]/30'
+                        : 'bg-white text-[#6E5D52] border border-[#E6DDD1] hover:border-[#E5A93C] hover:text-[#1E1915] font-semibold'
                     }`}
                   >
                     {r}
@@ -2322,7 +2338,7 @@ export default function BarberDashboardPage() {
 
             {/* Reason Textarea (Customer-facing) */}
             <div className="space-y-1.5 text-left">
-              <label className="text-[11px] font-bold uppercase tracking-wider text-[#C5B9AB] block">
+              <label className="text-[11px] font-black uppercase tracking-wider text-[#8C4717] block font-mono">
                 Message Sent to Customer (Editable):
               </label>
               <textarea
@@ -2330,10 +2346,11 @@ export default function BarberDashboardPage() {
                 value={rejectReason}
                 onChange={(e) => setRejectReason(e.target.value)}
                 placeholder="Type specific explanation for why this receipt is rejected..."
-                className="w-full bg-white/5 border border-white/15 focus:border-rose-400 rounded-xl p-3 text-xs text-white placeholder:text-white/30 outline-none transition-all ring-0 focus:ring-1 focus:ring-rose-400"
+                className="w-full bg-white border-2 border-[#E6DDD1] focus:border-[#E5A93C] focus:ring-2 focus:ring-[#E5A93C]/20 rounded-2xl p-3.5 text-xs text-[#1E1915] font-medium placeholder:text-[#A8988B] outline-none transition-all shadow-inner"
               />
-              <p className="text-[10px] text-white/50 italic">
-                * This message immediately displays on the customer's page with a button to re-upload without page reload.
+              <p className="text-[11px] text-[#8C7A6D] font-medium flex items-center gap-1.5 mt-1">
+                <Check className="w-3.5 h-3.5 text-emerald-600 stroke-[2.5]" />
+                <span>This explanation immediately displays on the customer's page with a button to re-upload without page reload.</span>
               </p>
             </div>
 
@@ -2343,12 +2360,12 @@ export default function BarberDashboardPage() {
                 type="button"
                 onClick={handleConfirmReject}
                 disabled={isRejecting || !rejectReason.trim()}
-                className="flex-1 py-3 px-4 rounded-xl bg-rose-600 hover:bg-rose-500 text-white font-extrabold text-xs uppercase tracking-wider transition-all disabled:opacity-50 cursor-pointer flex items-center justify-center gap-2 shadow-lg"
+                className="flex-1 py-3.5 px-5 rounded-2xl bg-gradient-to-r from-rose-700 via-rose-800 to-rose-900 hover:from-rose-600 hover:to-rose-800 text-white font-black text-xs uppercase tracking-wider transition-all disabled:opacity-50 cursor-pointer flex items-center justify-center gap-2 shadow-md shadow-rose-950/20 active:scale-[0.98]"
               >
                 {isRejecting ? (
                   <>
                     <RotateCcw className="w-4 h-4 animate-spin" />
-                    <span>Rejecting Receipt...</span>
+                    <span>Sending Rejection...</span>
                   </>
                 ) : (
                   <>
@@ -2360,7 +2377,7 @@ export default function BarberDashboardPage() {
               <button
                 type="button"
                 onClick={() => setRejectModalAppt(null)}
-                className="py-3 px-4 rounded-xl border border-white/15 text-xs font-bold text-white/80 hover:bg-white/10 transition-colors cursor-pointer"
+                className="py-3.5 px-5 rounded-2xl bg-[#FAF6F1] hover:bg-[#F2EAE1] text-[#6E5D52] border border-[#E6DDD1] text-xs font-black transition-colors cursor-pointer"
               >
                 Cancel
               </button>
@@ -2371,8 +2388,8 @@ export default function BarberDashboardPage() {
 
       {/* Rejection Success Toast */}
       {rejectSuccessToast && (
-        <div className="fixed bottom-6 left-1/2 -translate-x-1/2 z-50 bg-[#140F0C] text-[#FAF6F1] border-2 border-rose-500 px-5 py-3 rounded-2xl shadow-2xl flex items-center gap-2 text-xs font-bold animate-[slideUp_0.3s_ease-out]">
-          <Ban className="w-4 h-4 text-rose-400 flex-shrink-0" />
+        <div className="fixed bottom-6 left-1/2 -translate-x-1/2 z-50 bg-[#140F0C] text-[#FAF6F1] border-2 border-[#E5A93C] px-5 py-3 rounded-2xl shadow-2xl flex items-center gap-2.5 text-xs font-black animate-[slideUp_0.3s_ease-out]">
+          <CheckCircle2 className="w-4 h-4 text-[#E5A93C] stroke-[2.5] flex-shrink-0" />
           <span>{rejectSuccessToast}</span>
         </div>
       )}

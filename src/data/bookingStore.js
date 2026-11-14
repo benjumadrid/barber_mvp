@@ -1794,6 +1794,7 @@ export function rejectPaymentReceipt(refOrId, options = {}) {
           };
           saveActiveBooking(updatedActive);
           lastUpdated = updatedActive;
+          matched = true;
         }
       }
     }
