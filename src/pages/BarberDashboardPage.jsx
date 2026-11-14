@@ -84,10 +84,10 @@ export default function BarberDashboardPage() {
   const loadAppointments = async () => {
     try {
       const [dateData, allData] = await Promise.all([
-        getStaffAppointmentsByDate(selectedDateKey),
+        selectedDateKey === 'all' ? getStaffAllAppointments() : getStaffAppointmentsByDate(selectedDateKey),
         getStaffAllAppointments()
       ]);
-      setAppointments(dateData);
+      setAppointments(selectedDateKey === 'all' ? (allData || []) : dateData);
       setAllAppointments(allData || []);
       setInMemoryStaffAppointments(allData || []);
 
@@ -492,12 +492,20 @@ export default function BarberDashboardPage() {
   }, [availableDates, selectedDateKey]);
 
   const handlePrevDate = () => {
+    if (selectedDateKey === 'all') {
+      setSelectedDateKey(todayKey);
+      return;
+    }
     if (currentDateIndex > 0) {
       setSelectedDateKey(availableDates[currentDateIndex - 1].dateKey);
     }
   };
 
   const handleNextDate = () => {
+    if (selectedDateKey === 'all') {
+      setSelectedDateKey(todayKey);
+      return;
+    }
     if (currentDateIndex < availableDates.length - 1) {
       setSelectedDateKey(availableDates[currentDateIndex + 1].dateKey);
     }
@@ -684,15 +692,28 @@ export default function BarberDashboardPage() {
                   Select Date
                 </span>
                 <span className="text-xs sm:text-sm font-extrabold text-[#1E1915] font-['Cinzel',serif] tracking-wide truncate block">
-                  {availableDates.find(d => d.dateKey === selectedDateKey)?.display.month}{' '}
-                  {availableDates.find(d => d.dateKey === selectedDateKey)?.display.day}
-                  {selectedDateKey === todayKey ? ' (Today)' : ''}
+                  {selectedDateKey === 'all'
+                    ? `All Upcoming Dates (${allAppointments.length} Bookings)`
+                    : `${availableDates.find(d => d.dateKey === selectedDateKey)?.display.month} ${availableDates.find(d => d.dateKey === selectedDateKey)?.display.day}${selectedDateKey === todayKey ? ' (Today)' : ''}`}
                 </span>
               </div>
             </div>
 
             {/* Quick Date Control Buttons */}
             <div className="flex items-center gap-1.5 sm:gap-2 flex-shrink-0">
+              <button
+                type="button"
+                onClick={() => setSelectedDateKey('all')}
+                className={`px-2.5 sm:px-3 py-1 sm:py-1.5 rounded-lg sm:rounded-xl text-[11px] sm:text-xs font-extrabold tracking-wide transition-all cursor-pointer border ${
+                  selectedDateKey === 'all'
+                    ? 'bg-[#140F0C] text-[#FAF6F1] border-[#140F0C] shadow-xs'
+                    : 'bg-white text-[#1E1915] border-[#E6DDD1] hover:border-[#E5A93C]'
+                }`}
+                title="View All Scheduled Bookings"
+              >
+                All Dates ({allAppointments.length})
+              </button>
+
               <button
                 type="button"
                 onClick={handleTodayDate}
@@ -999,9 +1020,49 @@ export default function BarberDashboardPage() {
                 <p className="text-xs sm:text-sm text-[#6E5D52]">
                   {searchQuery || selectedBarberFilter !== 'all' || selectedPaymentFilter !== 'all' || selectedStatusFilter !== 'all'
                     ? 'No bookings match your selected search or filter criteria.'
-                    : 'There are currently no appointments booked for this date.'}
+                    : `There are currently no appointments booked for ${selectedDateKey === todayKey ? 'today' : 'this date'}.`}
                 </p>
               </div>
+
+              {/* Quick Jump Banner for Dates with Active Bookings */}
+              {(() => {
+                const datesWithBookings = availableDates.filter(d => (dateCountsMap[d.dateKey] || 0) > 0 && d.dateKey !== selectedDateKey);
+                if (datesWithBookings.length === 0) return null;
+
+                return (
+                  <div className="mt-4 p-4 sm:p-5 rounded-2xl bg-[#FAF2E3]/90 border-2 border-[#E5A93C]/70 text-left max-w-lg mx-auto space-y-3 shadow-xs">
+                    <div className="flex items-center gap-2 text-xs font-black uppercase tracking-wider text-[#8C4717] font-['Cinzel',serif]">
+                      <Sparkles className="w-4 h-4 text-[#C88A22]" />
+                      <span>Active Bookings Found On Other Dates</span>
+                    </div>
+                    <p className="text-xs text-[#6E5D52] leading-relaxed">
+                      You have active reservations booked on other dates. Click below to view:
+                    </p>
+                    <div className="flex flex-wrap gap-2 pt-1">
+                      {datesWithBookings.map(d => (
+                        <button
+                          key={d.dateKey}
+                          type="button"
+                          onClick={() => setSelectedDateKey(d.dateKey)}
+                          className="px-3.5 py-2 rounded-xl bg-white hover:bg-[#140F0C] text-[#1E1915] hover:text-[#FAF6F1] border-2 border-[#E5A93C] text-xs font-black flex items-center gap-2 shadow-xs transition-all cursor-pointer group"
+                        >
+                          <span>👉 {d.display.dayName}, {d.display.month} {d.display.day}</span>
+                          <span className="bg-[#FAF2E3] group-hover:bg-[#E5A93C] text-[#8C4717] group-hover:text-[#140F0C] px-2 py-0.5 rounded-full text-[10px] font-mono font-bold transition-colors">
+                            {dateCountsMap[d.dateKey]} {dateCountsMap[d.dateKey] === 1 ? 'Booking' : 'Bookings'}
+                          </span>
+                        </button>
+                      ))}
+                      <button
+                        type="button"
+                        onClick={() => setSelectedDateKey('all')}
+                        className="px-3.5 py-2 rounded-xl bg-gradient-to-r from-[#E5A93C] via-[#DF9C2F] to-[#D97706] text-[#1A1614] text-xs font-black flex items-center gap-1.5 shadow-sm hover:brightness-105 active:scale-95 transition-all cursor-pointer"
+                      >
+                        <span>View All Dates ({allAppointments.length})</span>
+                      </button>
+                    </div>
+                  </div>
+                );
+              })()}
 
               {(searchQuery || selectedBarberFilter !== 'all' || selectedPaymentFilter !== 'all' || selectedStatusFilter !== 'all') && (
                 <button
@@ -1062,6 +1123,11 @@ export default function BarberDashboardPage() {
                           }`}>
                             {appt.startTime || appt.timeId} – {appt.endTime || '60 min'}
                           </span>
+                          {selectedDateKey === 'all' && (
+                            <span className="text-[10px] font-mono font-extrabold px-2 py-0.5 rounded-lg bg-[#FAF2E3] text-[#8C4717] border border-[#E5A93C]/40">
+                              {formatAppointmentRelativeDate(appt.dateStr, currentTime)}
+                            </span>
+                          )}
                           
                           {/* Reference Code Chip */}
                           <button
@@ -1369,7 +1435,7 @@ export default function BarberDashboardPage() {
                       <div className="col-span-4 flex items-start gap-3.5 min-w-0">
                         
                         {/* Time badge */}
-                        <div className={`w-22 text-center p-2.5 rounded-2xl border flex-shrink-0 flex flex-col justify-center ${
+                        <div className={`w-24 text-center p-2 rounded-2xl border flex-shrink-0 flex flex-col justify-center ${
                           isCancelled
                             ? 'bg-red-50/60 border-red-200 text-[#6E5D52]'
                             : isInChair
@@ -1379,9 +1445,9 @@ export default function BarberDashboardPage() {
                           <span className={`text-[9px] font-extrabold uppercase font-mono block leading-tight ${
                             isInChair ? 'text-[#E5A93C]' : isCancelled ? 'text-red-700' : 'text-[#8C4717]'
                           }`}>
-                            Time Slot
+                            {selectedDateKey === 'all' ? (appt.dateStr || 'Date') : 'Time Slot'}
                           </span>
-                          <span className={`text-sm sm:text-base font-extrabold block mt-0.5 ${
+                          <span className={`text-xs sm:text-sm font-extrabold block mt-0.5 ${
                             isInChair ? 'text-white' : 'text-[#1E1915]'
                           }`}>
                             {appt.startTime || appt.timeId}
@@ -1389,7 +1455,7 @@ export default function BarberDashboardPage() {
                           <span className={`text-[10px] block mt-0.5 ${
                             isInChair ? 'text-[#C5B9AB]' : 'text-[#8C7A6D]'
                           }`}>
-                            {appt.endTime || '60 min'}
+                            {selectedDateKey === 'all' ? formatAppointmentRelativeDate(appt.dateStr, currentTime) : (appt.endTime || '60 min')}
                           </span>
                         </div>
 
