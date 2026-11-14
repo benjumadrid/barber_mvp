@@ -340,6 +340,8 @@ export default function MyAppointmentPage() {
     const newPrice = newService?.price || 0;
     const baselinePrice = Number(appointment.originalPrice) || Number(appointment.price) || 400;
     const priceDiff = newPrice - baselinePrice;
+    const isOriginalVerified = appointment.paymentStatus === 'Verified';
+    const verifiedPaid = appointment.paidAmount || (isOriginalVerified ? baselinePrice : 0);
 
     // MANDATORY PROOF CHECK FOR UPGRADES:
     // If the customer chose a more expensive service (priceDiff > 0), they MUST attach their 2nd receipt before completing the edit!
@@ -710,6 +712,8 @@ export default function MyAppointmentPage() {
     const newPrice = newService?.price || 0;
     const baselinePrice = Number(appointment.originalPrice) || Number(appointment.price) || 400;
     const priceDiff = newPrice - baselinePrice;
+    const isOriginalVerified = appointment.paymentStatus === 'Verified';
+    const verifiedPaid = appointment.paidAmount || (isOriginalVerified ? baselinePrice : 0);
 
     const currentBarber = MOCK_BARBERS.find(b => b.id === (appointment.barberId || appointment.actualBarberId));
     const newBarber = MOCK_BARBERS.find(b => b.id === editBarberId);
