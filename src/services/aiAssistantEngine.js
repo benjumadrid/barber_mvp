@@ -1595,6 +1595,54 @@ export function processMessage(userMessage, conversationHistory = []) {
 
   if (
     matchPhraseOrWord(parsed, [
+      'why dont i get the full refund', 'why dont i get full refund', 'why not full refund',
+      'why not 100 refund', 'why only 75', 'why only 75 percent', 'why 75 percent',
+      'why is there a fee', 'why 25 percent fee', 'why the fee', 'why 25 fee',
+      'cancellation fee reason', 'service change fee reason', 'why deduction',
+      'why did you deduct', 'why deduct'
+    ]) ||
+    ((tokens.includes('why') || tokens.includes('reason')) && (tokens.includes('full') || tokens.includes('75') || tokens.includes('25') || tokens.includes('fee') || tokens.includes('deduct') || tokens.includes('deduction')) && (tokens.includes('refund') || tokens.includes('cancel') || tokens.includes('money')))
+  ) {
+    return {
+      text: "Under Nhatty Barber House policy, cancellations and service downgrades receive a 75% refund. The remaining 25% is retained as a reservation service fee to cover reserved master barber chair time that was held exclusively for you.",
+      actions: [
+        { label: '🎫 View My Appointment', type: 'navigate', path: '/my-appointment' }
+      ]
+    };
+  }
+
+  if (
+    matchPhraseOrWord(parsed, [
+      'how much will i get refunded', 'how much refund will i get', 'how much do i get refunded',
+      'how much refund', 'what is my refund', 'what will i get back', 'how much do i get back',
+      'how much money back', 'how much will i get back', 'what is the refund amount'
+    ]) ||
+    ((tokens.includes('how') || tokens.includes('what')) && (tokens.includes('refund') || tokens.includes('back')) && (tokens.includes('much') || tokens.includes('get') || tokens.includes('i')))
+  ) {
+    if (activeAppointment) {
+      const isVerified = activeAppointment.paymentStatus === 'Verified';
+      const paid = activeAppointment.paidAmount !== undefined ? Number(activeAppointment.paidAmount) : (isVerified ? (activeAppointment.price || 0) : 0);
+      if (paid > 0) {
+        const refundAmt = Math.round(paid * 0.75);
+        const fee = Math.round(paid * 0.25);
+        return {
+          text: `If you cancel your appointment, you will receive a **75% refund of ${refundAmt} ETB** (25% fee of ${fee} ETB is retained for reserved master barber chair time).`,
+          actions: [
+            { label: '🎫 View My Appointment', type: 'navigate', path: '/my-appointment' }
+          ]
+        };
+      }
+    }
+    return {
+      text: "Under Nhatty Barber House policy, verified bookings receive a **75% refund** upon cancellation (25% cancellation fee is retained for reserved master barber chair time).",
+      actions: [
+        { label: '🎫 View My Appointment', type: 'navigate', path: '/my-appointment' }
+      ]
+    };
+  }
+
+  if (
+    matchPhraseOrWord(parsed, [
       'cancel', 'refund', 'money back', 'cancellation', 'cancelled', 'refunds',
       'how to cancel', 'can i get refund', 'what happens if i cancel',
       'what happens to my money', 'what happens with my money', 'my money', 'i want cancel',
@@ -1603,7 +1651,7 @@ export function processMessage(userMessage, conversationHistory = []) {
     (context.lastTopic === 'appointment' && (normalizedStr === 'can i cancel' || normalizedStr === 'cancel' || normalizedStr === 'refund' || normalizedStr === 'what about refund' || normalizedStr === 'what happens to my money'))
   ) {
     return {
-      text: "Yes. If you cancel, your slot is released and your refund is marked pending. For refund processing, please contact 0975 357 881 or visit us at Lucy Hotel Ground Floor, Dessie.",
+      text: "Yes. If you cancel within policy, your slot is released and you receive a **75% refund** directly to your Telebirr or CBE account (with a 25% fee retained for reserved master barber time). For questions, call 0975 357 881.",
       actions: [
         { label: '📞 Call 0975 357 881', type: 'call', phone: MOCK_SHOP_INFO.contact.phone }
       ]
@@ -1779,8 +1827,10 @@ export function processMessage(userMessage, conversationHistory = []) {
 
   // ── K. CURRENT ACTIVE APPOINTMENT INQUIRIES ─────────────────────────────
 
+  const isChangeOrBalance = tokens.includes('change') || tokens.includes('changed') || tokens.includes('original') || tokens.includes('owe') || tokens.includes('owing') || tokens.includes('balance') || tokens.includes('additional') || tokens.includes('credit');
+
   // 1. What service did I choose / what did I book?
-  const isMyCurrentServiceQuery = (
+  const isMyCurrentServiceQuery = !isChangeOrBalance && ((
     matchPhraseOrWord(parsed, [
       'what service did i choose', 'what service i choose', 'what service i chose',
       'what service i chosse', 'what service i choosed', 'wat servce i chose',
@@ -1799,7 +1849,7 @@ export function processMessage(userMessage, conversationHistory = []) {
     (tokens.includes('service') && (tokens.includes('i') || tokens.includes('my')) && (tokens.includes('choose') || tokens.includes('book') || tokens.includes('get') || tokens.includes('have'))) ||
     (tokens.length <= 2 && tokens.includes('my') && (tokens.includes('service') || tokens.includes('haircut'))) ||
     (context.lastTopic === 'appointment' && (normalizedStr === 'what service' || normalizedStr === 'which service' || normalizedStr === 'service' || normalizedStr === 'my service' || normalizedStr === 'which one' || normalizedStr === 'what haircut'))
-  );
+  ));
 
   if (isMyCurrentServiceQuery) {
     if (activeAppointment) {
@@ -1926,10 +1976,12 @@ export function processMessage(userMessage, conversationHistory = []) {
     };
   }
 
-  // 4. How much did I pay / how much is my booking?
+  // 4. How much did I pay / how much have I paid / how much is my booking?
   const isMyCurrentPriceQuery = (
     matchPhraseOrWord(parsed, [
-      'how much did i pay', 'how much is my booking', 'how much is my appointment',
+      'how much did i pay', 'how much have i paid', 'how much i have paid', 'how much i paid',
+      'how much paid', 'what have i paid', 'how much have i paid so far',
+      'how much is my booking', 'how much is my appointment',
       'how much i pay', 'what did i pay', 'how much do i pay', 'how much for my booking',
       'how much for my appointment', 'how much was my service', 'how much is my service',
       'how much did that cost', 'how much was that', 'how much is it'
@@ -1944,11 +1996,126 @@ export function processMessage(userMessage, conversationHistory = []) {
     ) && !matchPhraseOrWord(parsed, ['services', 'all services', 'all service', 'cheapest', 'haircut options', 'beard options', 'how many', 'barber', 'barbers'])
   );
 
+  // 4. How much did I pay / How much is my appointment / Balance due / Service changes
+  const isMyBalanceOrChangeQuery = (
+    matchPhraseOrWord(parsed, [
+      'how much do i owe', 'how much do i still owe', 'do i owe anything', 'what do i owe',
+      'how much is remaining', 'remaining payment', 'additional payment', 'do i have to pay more',
+      'did i change my service', 'did i change service', 'what was my original service', 'original service',
+      'new service', 'what is my new service', 'current price', 'what is my current price',
+      'what is my new price', 'what is the new price', 'my new price', 'new price', 'new appointment price'
+    ]) ||
+    ((tokens.includes('owe') || tokens.includes('owing') || tokens.includes('balance') || tokens.includes('change') || tokens.includes('original') || (tokens.includes('new') && (tokens.includes('price') || tokens.includes('service')))) && (tokens.includes('my') || tokens.includes('i') || Boolean(activeAppointment)))
+  );
+
+  if (isMyBalanceOrChangeQuery && activeAppointment) {
+    const sName = activeAppointment.serviceName || 'Grooming Service';
+    const price = activeAppointment.price || 0;
+    const isVerified = activeAppointment.paymentStatus === 'Verified';
+    const paidAmount = activeAppointment.paidAmount !== undefined ? Number(activeAppointment.paidAmount) : (isVerified ? price : 0);
+    const remainingAmount = activeAppointment.remainingAmount !== undefined ? Number(activeAppointment.remainingAmount) : (isVerified ? 0 : price);
+
+    if (normalizedStr.includes('original')) {
+      const origName = activeAppointment.originalServiceName || sName;
+      const origPrice = activeAppointment.originalPrice !== undefined ? activeAppointment.originalPrice : price;
+      const text = (origName !== sName)
+        ? `Your original service was **${origName}** (${origPrice} ETB). You updated it to **${sName}** (${price} ETB).`
+        : `Your original service is **${sName}** (${price} ETB).`;
+      return {
+        text,
+        actions: [{ label: '🎫 View Pass', type: 'navigate', path: '/my-appointment' }]
+      };
+    }
+
+    if (normalizedStr.includes('change')) {
+      const hasChanged = Boolean(activeAppointment.originalServiceName && activeAppointment.originalServiceName !== sName) || (activeAppointment.adjustmentType && activeAppointment.adjustmentType !== 'none');
+      if (hasChanged) {
+        let details = '';
+        if (activeAppointment.adjustmentType === 'additional_payment') {
+          details = ` An additional payment of **${remainingAmount} ETB** is required.`;
+        } else if (activeAppointment.adjustmentType === 'refund_or_credit') {
+          details = ` You have a credit/refund of **${activeAppointment.adjustmentAmount} ETB** due.`;
+        }
+        return {
+          text: `Yes — your service was changed from **${activeAppointment.originalServiceName || 'original'}** (${activeAppointment.originalPrice} ETB) to **${sName}** (${price} ETB).${details}`,
+          actions: [{ label: '🎫 View Pass', type: 'navigate', path: '/my-appointment' }]
+        };
+      } else {
+        return {
+          text: `You haven't changed your service. You are scheduled for **${sName}** (${price} ETB).`,
+          actions: [{ label: '🎫 View Pass', type: 'navigate', path: '/my-appointment' }]
+        };
+      }
+    }
+
+    if (normalizedStr.includes('new') || normalizedStr.includes('current price')) {
+      const origName = activeAppointment.originalServiceName || sName;
+      const origPrice = activeAppointment.originalPrice !== undefined ? activeAppointment.originalPrice : price;
+      let changeNote = '';
+      if (origName !== sName) {
+        changeNote = ` (changed from **${origName}** at ${origPrice} ETB)`;
+      }
+      let balanceNote = '';
+      if (activeAppointment.adjustmentType === 'additional_payment' && remainingAmount > 0) {
+        balanceNote = ` You previously paid **${paidAmount} ETB**, and an additional payment of **${remainingAmount} ETB** is required.`;
+      } else if (activeAppointment.adjustmentType === 'refund_or_credit' && activeAppointment.adjustmentAmount > 0) {
+        balanceNote = ` You previously paid **${paidAmount} ETB**, and have a credit/refund of **${activeAppointment.adjustmentAmount} ETB** due.`;
+      }
+      return {
+        text: `Your new service is **${sName}** at **${price} ETB**${changeNote}.${balanceNote}`,
+        actions: [{ label: '🎫 View Pass', type: 'navigate', path: '/my-appointment' }]
+      };
+    }
+
+    if (normalizedStr.includes('owe') || normalizedStr.includes('balance') || normalizedStr.includes('additional') || normalizedStr.includes('pay more') || normalizedStr.includes('remaining')) {
+      if (activeAppointment.adjustmentType === 'additional_payment' && remainingAmount > 0) {
+        return {
+          text: `You have an additional payment of **${remainingAmount} ETB** due for **${sName}** (New total: ${price} ETB, already paid: ${paidAmount} ETB).`,
+          actions: [{ label: '🎫 View Pass', type: 'navigate', path: '/my-appointment' }]
+        };
+      } else if (activeAppointment.adjustmentType === 'refund_or_credit') {
+        return {
+          text: `You don't owe anything! You have a **credit/refund of ${activeAppointment.adjustmentAmount} ETB** due from your service change to **${sName}** (${price} ETB).`,
+          actions: [{ label: '🎫 View Pass', type: 'navigate', path: '/my-appointment' }]
+        };
+      } else if (isVerified) {
+        return {
+          text: `You don't owe anything! Your payment of **${price} ETB** for **${sName}** is fully verified.`,
+          actions: [{ label: '🎫 View Pass', type: 'navigate', path: '/my-appointment' }]
+        };
+      } else {
+        return {
+          text: `Your total for **${sName}** is **${price} ETB** (Payment status: ${activeAppointment.paymentStatus}).`,
+          actions: [{ label: '🎫 View Pass', type: 'navigate', path: '/my-appointment' }]
+        };
+      }
+    }
+  }
+
   if (isMyCurrentPriceQuery) {
     if (activeAppointment) {
       const price = activeAppointment.price || activeAppointment.amountPaid || 400;
+      const isVerified = activeAppointment.paymentStatus === 'Verified';
+      const paid = activeAppointment.paidAmount !== undefined ? Number(activeAppointment.paidAmount) : (isVerified ? price : 0);
+      const remaining = activeAppointment.remainingAmount !== undefined ? Number(activeAppointment.remainingAmount) : (isVerified ? 0 : price);
+
+      if (activeAppointment.adjustmentType === 'additional_payment' && remaining > 0) {
+        return {
+          text: `Your current service is **${activeAppointment.serviceName}** (${price} ETB). You have paid **${paid} ETB** so far; an additional payment of **${remaining} ETB** is required.`,
+          actions: [
+            { label: '🎫 View Pass', type: 'navigate', path: '/my-appointment' }
+          ]
+        };
+      } else if (activeAppointment.adjustmentType === 'refund_or_credit') {
+        return {
+          text: `Your current service is **${activeAppointment.serviceName}** (${price} ETB). You paid **${paid} ETB**, so you have a **credit/refund of ${activeAppointment.adjustmentAmount} ETB** due.`,
+          actions: [
+            { label: '🎫 View Pass', type: 'navigate', path: '/my-appointment' }
+          ]
+        };
+      }
       return {
-        text: `Your service is **${price} ETB** (${activeAppointment.serviceName}).`,
+        text: `Your service is **${price} ETB** (${activeAppointment.serviceName}). You have paid **${paid} ETB** (Payment status: ${activeAppointment.paymentStatus}).`,
         actions: [
           { label: '🎫 View Pass', type: 'navigate', path: '/my-appointment' }
         ]

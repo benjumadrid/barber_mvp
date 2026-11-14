@@ -22,6 +22,7 @@ import {
   CheckCheck,
   ChevronLeft,
   ChevronRight,
+  ChevronDown,
   TrendingUp,
   FileCheck2,
   AlertTriangle,
@@ -34,11 +35,20 @@ import {
   getStaffAllAppointments, 
   setStaffPaymentStatus, 
   setStaffBookingStatus,
+  verifyAdditionalPayment,
+  verifyOriginalPayment,
+  revertOriginalPayment,
+  revertAdditionalPayment,
+  verifyAllPayments,
+  updateRefundStatus,
+  toggleShopRefundStatus,
   subscribeToBookingStore,
 } from '../services/mockApi';
 import { formatDateKey, formatDisplayDate, getUpcomingDates, getReceiptImage } from '../data/bookingStore';
 import { MOCK_BARBERS } from '../data/barbersData';
+import { setInMemoryStaffAppointments } from '../services/staffAiEngine';
 import StaffAiAssistant from '../components/dashboard/StaffAiAssistant';
+import ReceiptZoomViewer from '../components/common/ReceiptZoomViewer';
 
 export default function BarberDashboardPage() {
   const navigate = useNavigate();
@@ -67,6 +77,7 @@ export default function BarberDashboardPage() {
 
   // Interactive receipt preview modal
   const [activeReceiptModal, setActiveReceiptModal] = useState(null);
+  const [staffReceiptTab, setStaffReceiptTab] = useState('original');
   const [copiedRef, setCopiedRef] = useState(null);
 
   // Load appointments for selected date and all dates
@@ -78,6 +89,18 @@ export default function BarberDashboardPage() {
       ]);
       setAppointments(dateData);
       setAllAppointments(allData || []);
+      setInMemoryStaffAppointments(allData || []);
+
+      // If activeReceiptModal is open, refresh it with latest data
+      setActiveReceiptModal(prev => {
+        if (!prev) return null;
+        const found = (allData || []).find(a => 
+          (a.ref && a.ref === prev.ref) || 
+          (a.id && a.id === prev.id) || 
+          (a.barberId === prev.barberId && a.dateStr === prev.dateStr && a.timeId === prev.timeId)
+        );
+        return found ? { ...prev, ...found } : prev;
+      });
     } catch (err) {
       console.error('Error loading appointments:', err);
     } finally {
@@ -142,24 +165,290 @@ export default function BarberDashboardPage() {
     setTimeout(() => setCopiedRef(null), 2000);
   };
 
-  // Staff Payment Verification (Instant Optimistic UI + Storage Sync)
-  const handleTogglePaymentVerification = async (appt) => {
-    const newStatus = appt.paymentStatus === 'Verified' ? 'Verification Pending' : 'Verified';
-    const targetId = appt.ref || appt.id || `${appt.barberId}:${appt.dateStr}:${appt.timeId}`;
+  // ── Staff Payment Verification Handlers (Instant Optimistic UI + Storage Sync) ──
 
-    // Instant optimistic UI update
+  // Verify Original Payment
+  const handleVerifyOriginalPayment = async (appt) => {
+    const targetId = appt.ref || appt.id || `${appt.barberId}:${appt.dateStr}:${appt.timeId}`;
+    const fullPrice = Number(appt.price) || Number(appt.amountPaid) || 0;
+    const originalPrice = appt.originalPrice !== undefined ? Number(appt.originalPrice) : fullPrice;
+    const isAddVerified = appt.additionalPaymentStatus === 'Verified';
+    const verifiedAdd = isAddVerified ? (Number(appt.verifiedAdditionalAmount) || (fullPrice - originalPrice)) : 0;
+    const newPaid = originalPrice + verifiedAdd;
+    const newRemaining = Math.max(0, fullPrice - newPaid);
+    const isFullyPaid = !appt.isEdited || fullPrice <= originalPrice || isAddVerified;
+    const newPaymentStatus = isFullyPaid ? 'Verified' : (appt.additionalPaymentStatus === 'Pending Verification' ? 'Additional Payment Pending Verification' : 'Additional Payment Due');
+
     setAppointments(prev => prev.map(a => {
       if (a.ref === appt.ref || a.id === appt.id || (a.barberId === appt.barberId && a.dateStr === appt.dateStr && a.timeId === appt.timeId)) {
-        return { ...a, paymentStatus: newStatus };
+        return {
+          ...a,
+          originalPaymentStatus: 'Verified',
+          verifiedOriginalAmount: originalPrice,
+          paidAmount: newPaid,
+          amountPaid: newPaid,
+          remainingAmount: a.isEdited ? newRemaining : 0,
+          paymentStatus: newPaymentStatus,
+        };
       }
       return a;
     }));
 
     if (activeReceiptModal) {
-      setActiveReceiptModal(prev => prev ? { ...prev, paymentStatus: newStatus } : null);
+      setActiveReceiptModal(prev => prev ? {
+        ...prev,
+        originalPaymentStatus: 'Verified',
+        verifiedOriginalAmount: originalPrice,
+        paidAmount: newPaid,
+        amountPaid: newPaid,
+        remainingAmount: prev.isEdited ? newRemaining : 0,
+        paymentStatus: newPaymentStatus,
+      } : null);
     }
 
-    await setStaffPaymentStatus(targetId, newStatus);
+    await verifyOriginalPayment(targetId);
+  };
+
+  // Revert Original Payment to Pending
+  const handleRevertOriginalPayment = async (appt) => {
+    const targetId = appt.ref || appt.id || `${appt.barberId}:${appt.dateStr}:${appt.timeId}`;
+    const fullPrice = Number(appt.price) || 0;
+    const isAddVerified = appt.additionalPaymentStatus === 'Verified';
+    const verifiedAdd = isAddVerified ? (Number(appt.verifiedAdditionalAmount) || 0) : 0;
+    const newRemaining = appt.isEdited ? Math.max(0, fullPrice - verifiedAdd) : 0;
+
+    setAppointments(prev => prev.map(a => {
+      if (a.ref === appt.ref || a.id === appt.id || (a.barberId === appt.barberId && a.dateStr === appt.dateStr && a.timeId === appt.timeId)) {
+        return {
+          ...a,
+          originalPaymentStatus: 'Pending Verification',
+          verifiedOriginalAmount: 0,
+          paidAmount: verifiedAdd,
+          amountPaid: verifiedAdd,
+          remainingAmount: newRemaining,
+          paymentStatus: 'Verification Pending',
+        };
+      }
+      return a;
+    }));
+
+    if (activeReceiptModal) {
+      setActiveReceiptModal(prev => prev ? {
+        ...prev,
+        originalPaymentStatus: 'Pending Verification',
+        verifiedOriginalAmount: 0,
+        paidAmount: verifiedAdd,
+        amountPaid: verifiedAdd,
+        remainingAmount: newRemaining,
+        paymentStatus: 'Verification Pending',
+      } : null);
+    }
+
+    await revertOriginalPayment(targetId);
+  };
+
+  // Verify Additional Payment
+  const handleVerifyAdditionalPayment = async (appt) => {
+    const targetId = appt.ref || appt.id || `${appt.barberId}:${appt.dateStr}:${appt.timeId}`;
+    const fullPrice = Number(appt.price) || Number(appt.currentPrice) || 0;
+    const originalPrice = appt.originalPrice !== undefined ? Number(appt.originalPrice) : fullPrice;
+    const addAmount = Number(appt.additionalSubmittedAmount) || Number(appt.adjustmentAmount) || (fullPrice - originalPrice);
+    const isOrigVerified = appt.originalPaymentStatus === 'Verified' || appt.paymentStatus === 'Verified';
+    const verifiedOrig = isOrigVerified ? originalPrice : 0;
+    const newPaid = verifiedOrig + addAmount;
+    const newRemaining = Math.max(0, fullPrice - newPaid);
+    const newPaymentStatus = isOrigVerified ? 'Verified' : 'Verification Pending';
+
+    setAppointments(prev => prev.map(a => {
+      if (a.ref === appt.ref || a.id === appt.id || (a.barberId === appt.barberId && a.dateStr === appt.dateStr && a.timeId === appt.timeId)) {
+        return {
+          ...a,
+          additionalPaymentStatus: 'Verified',
+          verifiedAdditionalAmount: addAmount,
+          paidAmount: newPaid,
+          amountPaid: newPaid,
+          remainingAmount: a.isEdited ? newRemaining : 0,
+          paymentStatus: newPaymentStatus,
+        };
+      }
+      return a;
+    }));
+
+    if (activeReceiptModal) {
+      setActiveReceiptModal(prev => prev ? {
+        ...prev,
+        additionalPaymentStatus: 'Verified',
+        verifiedAdditionalAmount: addAmount,
+        paidAmount: newPaid,
+        amountPaid: newPaid,
+        remainingAmount: prev.isEdited ? newRemaining : 0,
+        paymentStatus: newPaymentStatus,
+      } : null);
+    }
+
+    await verifyAdditionalPayment(targetId);
+  };
+
+  // Revert Additional Payment to Pending
+  const handleRevertAdditionalPayment = async (appt) => {
+    const targetId = appt.ref || appt.id || `${appt.barberId}:${appt.dateStr}:${appt.timeId}`;
+    const fullPrice = Number(appt.price) || 0;
+    const originalPrice = appt.originalPrice !== undefined ? Number(appt.originalPrice) : fullPrice;
+    const isOrigVerified = appt.originalPaymentStatus === 'Verified';
+    const verifiedOrig = isOrigVerified ? originalPrice : 0;
+    const addDiff = Math.max(0, fullPrice - originalPrice);
+    const newPaymentStatus = isOrigVerified ? (appt.additionalSubmittedAmount > 0 ? 'Additional Payment Pending Verification' : 'Additional Payment Due') : 'Verification Pending';
+
+    setAppointments(prev => prev.map(a => {
+      if (a.ref === appt.ref || a.id === appt.id || (a.barberId === appt.barberId && a.dateStr === appt.dateStr && a.timeId === appt.timeId)) {
+        return {
+          ...a,
+          additionalPaymentStatus: a.additionalSubmittedAmount > 0 ? 'Pending Verification' : 'None',
+          verifiedAdditionalAmount: 0,
+          paidAmount: verifiedOrig,
+          amountPaid: verifiedOrig,
+          remainingAmount: addDiff,
+          paymentStatus: newPaymentStatus,
+        };
+      }
+      return a;
+    }));
+
+    if (activeReceiptModal) {
+      setActiveReceiptModal(prev => prev ? {
+        ...prev,
+        additionalPaymentStatus: prev.additionalSubmittedAmount > 0 ? 'Pending Verification' : 'None',
+        verifiedAdditionalAmount: 0,
+        paidAmount: verifiedOrig,
+        amountPaid: verifiedOrig,
+        remainingAmount: addDiff,
+        paymentStatus: newPaymentStatus,
+      } : null);
+    }
+
+    await revertAdditionalPayment(targetId);
+  };
+
+  // Verify All Payments (Both Original & Additional)
+  const handleVerifyAllPayments = async (appt) => {
+    const targetId = appt.ref || appt.id || `${appt.barberId}:${appt.dateStr}:${appt.timeId}`;
+    const fullPrice = Number(appt.price) || Number(appt.currentPrice) || 0;
+    const originalPrice = appt.originalPrice !== undefined ? Number(appt.originalPrice) : fullPrice;
+    const addDiff = Math.max(0, fullPrice - originalPrice);
+
+    setAppointments(prev => prev.map(a => {
+      if (a.ref === appt.ref || a.id === appt.id || (a.barberId === appt.barberId && a.dateStr === appt.dateStr && a.timeId === appt.timeId)) {
+        return {
+          ...a,
+          originalPaymentStatus: 'Verified',
+          additionalPaymentStatus: (a.isEdited && addDiff > 0) ? 'Verified' : (a.additionalPaymentStatus || 'None'),
+          verifiedOriginalAmount: originalPrice,
+          verifiedAdditionalAmount: addDiff,
+          paidAmount: fullPrice,
+          amountPaid: fullPrice,
+          remainingAmount: 0,
+          paymentStatus: 'Verified',
+        };
+      }
+      return a;
+    }));
+
+    if (activeReceiptModal) {
+      setActiveReceiptModal(prev => prev ? {
+        ...prev,
+        originalPaymentStatus: 'Verified',
+        additionalPaymentStatus: (prev.isEdited && addDiff > 0) ? 'Verified' : (prev.additionalPaymentStatus || 'None'),
+        verifiedOriginalAmount: originalPrice,
+        verifiedAdditionalAmount: addDiff,
+        paidAmount: fullPrice,
+        amountPaid: fullPrice,
+        remainingAmount: 0,
+        paymentStatus: 'Verified',
+      } : null);
+    }
+
+    await verifyAllPayments(targetId);
+  };
+
+  // Toggle Payment Verification Button on Appointment Card
+  const handleTogglePaymentVerification = async (appt) => {
+    if (appt.paymentStatus === 'Verified') {
+      await handleRevertOriginalPayment(appt);
+    } else {
+      await handleVerifyAllPayments(appt);
+    }
+  };
+
+  // Staff Mark Refund Completed (Instant Optimistic UI + Storage Sync)
+  const handleCompleteRefund = async (appt) => {
+    const targetId = appt.ref || appt.id || `${appt.barberId}:${appt.dateStr}:${appt.timeId}`;
+
+    setAppointments(prev => prev.map(a => {
+      if (a.ref === appt.ref || a.id === appt.id || (a.barberId === appt.barberId && a.dateStr === appt.dateStr && a.timeId === appt.timeId)) {
+        return {
+          ...a,
+          refundStatus: 'Refund Completed',
+          status: (a.status === 'Customer Cancelled' || a.status === 'Cancelled') ? 'Cancelled — Refund Completed' : a.status,
+          bookingStatus: (a.bookingStatus === 'Customer Cancelled' || a.bookingStatus === 'Cancelled') ? 'Cancelled — Refund Completed' : a.bookingStatus
+        };
+      }
+      return a;
+    }));
+
+    if (activeReceiptModal) {
+      setActiveReceiptModal(prev => prev ? {
+        ...prev,
+        refundStatus: 'Refund Completed',
+        status: (prev.status === 'Customer Cancelled' || prev.status === 'Cancelled') ? 'Cancelled — Refund Completed' : prev.status,
+        bookingStatus: (prev.bookingStatus === 'Customer Cancelled' || prev.bookingStatus === 'Cancelled') ? 'Cancelled — Refund Completed' : prev.bookingStatus
+      } : null);
+    }
+
+    await updateRefundStatus(targetId, 'Refund Completed');
+  };
+
+  // Staff Mark / Toggle Cash Change Handover (Instant Optimistic UI + Storage Sync)
+  const handleToggleShopRefund = async (appt, explicitHandedOver = null) => {
+    const targetId = appt.ref || appt.id || `${appt.barberId}:${appt.dateStr}:${appt.timeId}`;
+    const nextHandedOver = explicitHandedOver !== null ? Boolean(explicitHandedOver) : !Boolean(appt.shopRefundHandedOver);
+    const nowIso = new Date().toISOString();
+    const staffName = session?.name || 'Nhatty Staff Admin';
+
+    // Optimistic UI update for appointments and allAppointments
+    setAppointments(prev => prev.map(a => {
+      if (a.ref === appt.ref || a.id === appt.id || (a.barberId === appt.barberId && a.dateStr === appt.dateStr && a.timeId === appt.timeId)) {
+        return {
+          ...a,
+          shopRefundHandedOver: nextHandedOver,
+          shopRefundHandedOverAt: nextHandedOver ? nowIso : null,
+          shopRefundHandedOverBy: nextHandedOver ? staffName : null
+        };
+      }
+      return a;
+    }));
+
+    setAllAppointments(prev => prev.map(a => {
+      if (a.ref === appt.ref || a.id === appt.id || (a.barberId === appt.barberId && a.dateStr === appt.dateStr && a.timeId === appt.timeId)) {
+        return {
+          ...a,
+          shopRefundHandedOver: nextHandedOver,
+          shopRefundHandedOverAt: nextHandedOver ? nowIso : null,
+          shopRefundHandedOverBy: nextHandedOver ? staffName : null
+        };
+      }
+      return a;
+    }));
+
+    if (activeReceiptModal) {
+      setActiveReceiptModal(prev => prev ? {
+        ...prev,
+        shopRefundHandedOver: nextHandedOver,
+        shopRefundHandedOverAt: nextHandedOver ? nowIso : null,
+        shopRefundHandedOverBy: nextHandedOver ? staffName : null
+      } : null);
+    }
+
+    await toggleShopRefundStatus(targetId, nextHandedOver, staffName);
   };
 
   // Staff Booking Status Update (Instant Optimistic UI + Storage Sync)
@@ -258,14 +547,50 @@ export default function BarberDashboardPage() {
   // Daily statistics
   const stats = useMemo(() => {
     const total = appointments.length;
-    const pendingVerification = appointments.filter(a => a.paymentStatus !== 'Verified').length;
+    const pendingVerification = appointments.filter(a => a.paymentStatus !== 'Verified' || a.additionalPaymentStatus === 'Pending Verification').length;
     const inChair = appointments.filter(a => a.status === 'In-Chair' || a.bookingStatus === 'In-Chair').length;
     const completed = appointments.filter(a => a.status === 'Completed' || a.bookingStatus === 'Completed').length;
     
-    // Realized daily revenue: excludes appointments only once refund is marked completed
-    const totalRevenue = appointments
-      .filter(a => a.status !== 'Cancelled — Refund Completed' && a.bookingStatus !== 'Cancelled — Refund Completed' && a.refundStatus !== 'Completed')
-      .reduce((sum, a) => sum + (Number(a.price) || Number(a.amountPaid) || 0), 0);
+    // Realized daily revenue: strictly counts VERIFIED collected money
+    const totalRevenue = appointments.reduce((sum, a) => {
+      const isVerified = a.paymentStatus === 'Verified';
+      const isCompleted = a.status === 'Completed' || a.bookingStatus === 'Completed';
+      const isCancelled = a.status === 'Customer Cancelled' || a.status === 'Cancelled' || a.status === 'Cancelled — Refund Completed' || a.bookingStatus === 'Customer Cancelled' || a.bookingStatus === 'Cancelled' || a.bookingStatus === 'Cancelled — Refund Completed';
+
+      if (isCancelled) {
+        // Retain 25% cancellation fee if payment was verified
+        if (isVerified || Number(a.verifiedOriginalAmount) > 0) {
+          const fee = Number(a.refundFee) || Math.round((Number(a.verifiedOriginalAmount) || Number(a.price) || 0) * 0.25);
+          return sum + fee;
+        }
+        return sum;
+      }
+
+      if (isCompleted) {
+        return sum + (Number(a.price) || 0);
+      }
+
+      // Active / Confirmed appointment:
+      if (!isVerified && (!a.verifiedOriginalAmount || Number(a.verifiedOriginalAmount) === 0)) {
+        // Unverified / Pending booking: NEVER inflate realized revenue
+        return sum;
+      }
+
+      // Base verified amount
+      const baseVerified = Number(a.verifiedOriginalAmount) || Number(a.paidAmount) || Number(a.originalPrice) || Number(a.price) || 0;
+      // Additional verified amount
+      const additionalVerified = a.additionalPaymentStatus === 'Verified' ? (Number(a.verifiedAdditionalAmount) || Number(a.additionalSubmittedAmount) || 0) : 0;
+      
+      let collected = baseVerified + additionalVerified;
+      // If downgraded, subtract refund
+      if (a.adjustmentType === 'refund_or_credit' || Number(a.refundAmount) > 0) {
+        const refAmt = Number(a.refundAmount) || 0;
+        collected = Math.max(0, collected - refAmt);
+      }
+
+      const currentPrice = Number(a.price) || collected;
+      return sum + Math.min(collected, currentPrice);
+    }, 0);
 
     return { total, pendingVerification, inChair, completed, totalRevenue };
   }, [appointments]);
@@ -698,6 +1023,7 @@ export default function BarberDashboardPage() {
             <div className="space-y-3 sm:space-y-3.5 min-w-0">
               {filteredAppointments.map((appt) => {
                 const isVerified = appt.paymentStatus === 'Verified';
+                const isOrigVerified = appt.originalPaymentStatus === 'Verified' || (appt.paymentStatus === 'Verified' && !appt.isEdited);
                 const isInChair = appt.status === 'In-Chair' || appt.bookingStatus === 'In-Chair';
                 const isCompleted = appt.status === 'Completed' || appt.bookingStatus === 'Completed';
                 const isCustomerCancelled = appt.status === 'Customer Cancelled' || appt.bookingStatus === 'Customer Cancelled';
@@ -751,6 +1077,17 @@ export default function BarberDashboardPage() {
                               <Copy className="w-3 h-3 text-[#9E8B7F]" />
                             )}
                           </button>
+
+                          {/* Distinction Badge: New Booking vs Service Changed */}
+                          {appt.isEdited ? (
+                            <span className="text-[9px] sm:text-[9.5px] font-mono font-black px-2 py-0.5 rounded-full uppercase tracking-wider bg-purple-100 text-purple-800 border border-purple-300 inline-flex items-center gap-1 shadow-2xs">
+                              <span>SERVICE CHANGED</span>
+                            </span>
+                          ) : (
+                            <span className="text-[9px] sm:text-[9.5px] font-mono font-black px-2 py-0.5 rounded-full uppercase tracking-wider bg-blue-50 text-blue-700 border border-blue-200 inline-flex items-center gap-1 shadow-2xs">
+                              <span>NEW BOOKING</span>
+                            </span>
+                          )}
                         </div>
 
                         {/* Appointment Status Badge */}
@@ -806,9 +1143,16 @@ export default function BarberDashboardPage() {
                           <span className="text-[#8C7A6D] font-mono text-[10px] sm:text-[11px] uppercase font-bold min-w-[65px] flex-shrink-0">
                             Service:
                           </span>
-                          <span className="font-bold text-[#1E1915] break-words leading-tight">
-                            {appt.serviceName}
-                          </span>
+                          <div className="min-w-0">
+                            <span className="font-bold text-[#1E1915] break-words leading-tight block">
+                              {appt.serviceName}
+                            </span>
+                            {appt.originalServiceName && appt.originalServiceName !== appt.serviceName && (
+                              <span className="text-[9.5px] text-[#8C4717] font-semibold block mt-0.5">
+                                Changed from: {appt.originalServiceName} ({appt.originalPrice} ETB)
+                              </span>
+                            )}
+                          </div>
                         </div>
 
                         <div className="flex items-baseline gap-1.5 min-w-0">
@@ -824,12 +1168,52 @@ export default function BarberDashboardPage() {
                           <span className="text-[#8C7A6D] font-mono text-[10px] sm:text-[11px] uppercase font-bold min-w-[65px] flex-shrink-0">
                             Payment:
                           </span>
-                          <span className="font-mono font-black text-[#1E1915]">
-                            {appt.price || appt.amountPaid} ETB{' '}
-                            <span className="font-sans font-normal text-[#8C7A6D] uppercase text-[10px]">
-                              ({appt.paymentMethod})
+                          <div className="min-w-0">
+                            <span className="font-mono font-black text-[#1E1915]">
+                              {appt.price || appt.amountPaid} ETB{' '}
+                              <span className="font-sans font-normal text-[#8C7A6D] uppercase text-[10px]">
+                                ({appt.paymentMethod})
+                              </span>
                             </span>
-                          </span>
+                            {appt.adjustmentType === 'additional_payment' && Number(appt.remainingAmount) > 0 && (
+                              <span className="block text-[10px] font-bold text-amber-800 mt-0.5">
+                                Paid: {appt.paidAmount} ETB • <span className="font-black">+{appt.remainingAmount} ETB Due</span>
+                              </span>
+                            )}
+                            {(appt.adjustmentType === 'downgrade_refund_at_shop' || (appt.overpaymentAmount > 0) || (appt.originalPrice && Number(appt.originalPrice) > Number(appt.price))) && (() => {
+                              const changeAmt = appt.overpaymentAmount || (Number(appt.originalPrice) - Number(appt.price));
+                              const isHandedOver = Boolean(appt.shopRefundHandedOver);
+                              return (
+                                <div className="mt-1 relative inline-flex items-center w-full" onClick={(e) => e.stopPropagation()}>
+                                  <select
+                                    value={isHandedOver ? 'returned' : 'pending'}
+                                    onChange={(e) => {
+                                      e.stopPropagation();
+                                      handleToggleShopRefund(appt, e.target.value === 'returned');
+                                    }}
+                                    className={`w-full appearance-none pl-2.5 pr-7 py-1.5 rounded-lg text-[10.5px] font-mono font-bold uppercase transition-all cursor-pointer border shadow-xs outline-none ${
+                                      isHandedOver
+                                        ? 'bg-emerald-100 text-emerald-900 border-emerald-400 hover:bg-emerald-200'
+                                        : 'bg-rose-100 text-rose-900 border-rose-300 hover:bg-rose-200'
+                                    }`}
+                                  >
+                                    <option value="pending" className="bg-white text-rose-900 font-bold">
+                                      ❌ Return {changeAmt} ETB Change
+                                    </option>
+                                    <option value="returned" className="bg-white text-emerald-900 font-bold">
+                                      ✓ {changeAmt} ETB Returned
+                                    </option>
+                                  </select>
+                                  <ChevronDown className={`w-3.5 h-3.5 pointer-events-none absolute right-2.5 ${isHandedOver ? 'text-emerald-700' : 'text-rose-700'}`} />
+                                </div>
+                              );
+                            })()}
+                            {appt.adjustmentType === 'refund_or_credit' && (
+                              <span className="block text-[10px] font-bold text-emerald-700 mt-0.5">
+                                Paid: {appt.paidAmount} ETB • <span className="font-black">{appt.adjustmentAmount} ETB Credit Due</span>
+                              </span>
+                            )}
+                          </div>
                         </div>
 
                         <div className="flex items-baseline gap-1.5 min-w-0">
@@ -874,6 +1258,41 @@ export default function BarberDashboardPage() {
                         </p>
                       )}
 
+                      {/* Additional Payment verification callout for mobile */}
+                      {appt.additionalPaymentStatus === 'Pending Verification' && (
+                        <div className="p-2.5 rounded-xl bg-amber-50 border border-amber-200 text-amber-900 flex items-center justify-between gap-2">
+                          <div>
+                            <span className="text-[10px] font-bold uppercase tracking-wider block text-amber-800">Additional Proof</span>
+                            <span className="text-xs font-black font-mono">+{appt.additionalSubmittedAmount || appt.remainingAmount} ETB</span>
+                          </div>
+                          <button
+                            type="button"
+                            onClick={() => handleVerifyAdditionalPayment(appt)}
+                            className="px-2.5 py-1.5 rounded-lg bg-amber-500 hover:bg-amber-600 text-black text-[11px] font-extrabold uppercase cursor-pointer shadow-xs"
+                          >
+                            Verify +{appt.additionalSubmittedAmount || appt.remainingAmount} ETB
+                          </button>
+                        </div>
+                      )}
+
+                      {/* Refund callout for mobile */}
+                      {(appt.refundStatus === 'Refund Requested' || (Number(appt.refundAmount) > 0 && appt.refundStatus !== 'Refund Completed' && appt.refundStatus !== 'Completed')) && (
+                        <div className="p-2.5 rounded-xl bg-rose-50 border border-rose-200 text-rose-900 flex items-center justify-between gap-2">
+                          <div>
+                            <span className="text-[10px] font-bold uppercase tracking-wider block text-rose-800">75% Refund Due</span>
+                            <span className="text-xs font-black font-mono">{appt.refundAmount} ETB</span>
+                            <span className="text-[10px] block text-rose-700 font-mono">To: {appt.refundMethod?.toUpperCase()} • {appt.refundAccount || 'Not provided'}</span>
+                          </div>
+                          <button
+                            type="button"
+                            onClick={() => handleCompleteRefund(appt)}
+                            className="px-2.5 py-1.5 rounded-lg bg-rose-600 hover:bg-rose-700 text-white text-[11px] font-extrabold uppercase cursor-pointer shadow-xs"
+                          >
+                            Mark Paid
+                          </button>
+                        </div>
+                      )}
+
                       {/* Card Footer: Touch-Friendly 44px Action Controls */}
                       <div className="flex items-center gap-2 pt-2.5 border-t border-[#E6DDD1]/80 flex-wrap sm:flex-nowrap">
                         <button
@@ -901,7 +1320,10 @@ export default function BarberDashboardPage() {
                         {(appt.receiptPreview || appt.receiptFileName || appt.paymentMethod === 'cbe' || appt.paymentMethod === 'telebirr') && (
                           <button
                             type="button"
-                            onClick={() => setActiveReceiptModal(appt)}
+                            onClick={() => {
+                              setActiveReceiptModal(appt);
+                              setStaffReceiptTab('original');
+                            }}
                             className="min-h-[44px] inline-flex items-center justify-center gap-1.5 px-3.5 py-2.5 rounded-xl border border-[#E5A93C]/60 hover:border-[#E5A93C] bg-[#FAF6F1] hover:bg-white text-[#1E1915] transition-all cursor-pointer shadow-xs flex-shrink-0"
                             title="View customer payment receipt"
                           >
@@ -992,6 +1414,17 @@ export default function BarberDashboardPage() {
                               )}
                             </button>
 
+                            {/* Distinction Badge: New Booking vs Service Changed */}
+                            {appt.isEdited ? (
+                              <span className="text-[9.5px] font-mono font-black px-2.5 py-0.5 rounded-full uppercase tracking-wider bg-purple-100 text-purple-800 border border-purple-300 inline-flex items-center gap-1 shadow-2xs">
+                                <span>SERVICE CHANGED</span>
+                              </span>
+                            ) : (
+                              <span className="text-[9.5px] font-mono font-black px-2.5 py-0.5 rounded-full uppercase tracking-wider bg-blue-50 text-blue-700 border border-blue-200 inline-flex items-center gap-1 shadow-2xs">
+                                <span>NEW BOOKING</span>
+                              </span>
+                            )}
+
                             {isInChair && (
                               <span className="text-[9.5px] font-extrabold font-mono px-2 py-0.5 rounded-full bg-[#140F0C] text-[#E5A93C] border border-[#E5A93C]/50 flex items-center gap-1">
                                 <span className="w-1.5 h-1.5 rounded-full bg-[#E5A93C] animate-pulse"></span>
@@ -1040,18 +1473,92 @@ export default function BarberDashboardPage() {
                       </div>
 
                       {/* Middle: Service & Price Breakdown (Cols 5-8, dedicated width with clean vertical borders) */}
-                      <div className="col-span-4 flex items-center justify-start lg:border-l lg:border-r lg:border-[#E6DDD1] lg:px-5 min-w-0">
+                      <div className="col-span-4 flex items-center justify-start lg:border-l lg:border-r lg:border-[#E6DDD1] lg:px-5 min-w-0 overflow-hidden relative">
                         <div className="text-left w-full min-w-0">
-                          <p className="text-[10px] font-extrabold uppercase text-[#9E8B7F] font-mono tracking-wider">
-                            Requested Service
-                          </p>
+                          <div className="flex items-center justify-between gap-1 flex-wrap">
+                            <p className="text-[10px] font-extrabold uppercase text-[#9E8B7F] font-mono tracking-wider">
+                              Requested Service
+                            </p>
+                            {appt.adjustmentType === 'additional_payment' && Number(appt.remainingAmount) > 0 && (
+                              <span className="text-[9.5px] font-mono font-black text-amber-900 bg-amber-100 border border-amber-300 px-1.5 py-0.5 rounded">
+                                +{appt.remainingAmount} ETB DUE
+                              </span>
+                            )}
+                            {(appt.adjustmentType === 'downgrade_refund_at_shop' || (appt.overpaymentAmount > 0) || (appt.originalPrice && Number(appt.originalPrice) > Number(appt.price))) && (() => {
+                              const changeAmt = appt.overpaymentAmount || (Number(appt.originalPrice) - Number(appt.price));
+                              const isHandedOver = Boolean(appt.shopRefundHandedOver);
+                              return (
+                                <div className="relative inline-flex items-center" onClick={(e) => e.stopPropagation()}>
+                                  <select
+                                    value={isHandedOver ? 'returned' : 'pending'}
+                                    onChange={(e) => {
+                                      e.stopPropagation();
+                                      handleToggleShopRefund(appt, e.target.value === 'returned');
+                                    }}
+                                    className={`appearance-none text-[9.5px] font-mono font-black uppercase tracking-wider pl-2 pr-5 py-0.5 rounded cursor-pointer border shadow-2xs transition-all outline-none ${
+                                      isHandedOver
+                                        ? 'bg-emerald-100 hover:bg-emerald-200 text-emerald-900 border-emerald-400 ring-1 ring-emerald-500/20'
+                                        : 'bg-rose-100 hover:bg-rose-200 text-rose-900 border-rose-300 ring-1 ring-rose-500/20'
+                                    }`}
+                                    title="Click dropdown to change status"
+                                  >
+                                    <option value="pending" className="bg-white text-rose-900 font-bold">
+                                      ❌ Return {changeAmt} ETB Change
+                                    </option>
+                                    <option value="returned" className="bg-white text-emerald-900 font-bold">
+                                      ✓ {changeAmt} ETB Returned
+                                    </option>
+                                  </select>
+                                  <ChevronDown className={`w-3 h-3 pointer-events-none absolute right-1 ${isHandedOver ? 'text-emerald-700' : 'text-rose-700'}`} />
+                                </div>
+                              );
+                            })()}
+                            {appt.adjustmentType === 'refund_or_credit' && (
+                              <span className="text-[9.5px] font-mono font-black text-emerald-900 bg-emerald-100 border border-emerald-300 px-1.5 py-0.5 rounded">
+                                {appt.adjustmentAmount} ETB CREDIT DUE
+                              </span>
+                            )}
+                          </div>
                           <p className="font-extrabold text-[#1E1915] text-sm sm:text-base mt-0.5 leading-snug break-words">
                             {appt.serviceName}
                           </p>
+                          {appt.originalServiceName && appt.originalServiceName !== appt.serviceName && (
+                            <p className="text-[10.5px] text-[#8C4717] font-semibold truncate mt-0.5">
+                              Changed from: {appt.originalServiceName} ({appt.originalPrice} ETB)
+                            </p>
+                          )}
+                          {(appt.adjustmentType === 'downgrade_refund_at_shop' || (appt.overpaymentAmount > 0) || (appt.originalPrice && Number(appt.originalPrice) > Number(appt.price))) && (() => {
+                            const changeAmt = appt.overpaymentAmount || (Number(appt.originalPrice) - Number(appt.price));
+                            const isHandedOver = Boolean(appt.shopRefundHandedOver);
+                            return (
+                              <p className={`text-[10px] font-bold mt-0.5 flex items-center gap-1 ${isHandedOver ? 'text-emerald-800' : 'text-rose-800'}`}>
+                                {isHandedOver ? (
+                                  <span>✓ {changeAmt} ETB cash change handed over to customer at shop</span>
+                                ) : (
+                                  <span>⚠️ Hand over {changeAmt} ETB cash change to customer upon arrival</span>
+                                )}
+                              </p>
+                            );
+                          })()}
                           <div className="flex items-center gap-2 mt-1 flex-wrap">
                             <p className="text-xs font-black text-[#C88A22] font-mono tracking-wide">
                               {appt.price || appt.amountPaid} ETB
                             </p>
+                            {appt.adjustmentType === 'additional_payment' && Number(appt.remainingAmount) > 0 && (
+                              <span className="text-[10px] text-[#6E5D52] font-semibold">
+                                (Paid: {appt.paidAmount} ETB)
+                              </span>
+                            )}
+                            {(appt.adjustmentType === 'downgrade_refund_at_shop' || (appt.overpaymentAmount > 0) || (appt.originalPrice && Number(appt.originalPrice) > Number(appt.price))) && (
+                              <span className="text-[10px] text-emerald-800 font-semibold">
+                                (Submitted: {appt.submittedAmount || appt.originalPrice} ETB)
+                              </span>
+                            )}
+                            {appt.adjustmentType === 'refund_or_credit' && (
+                              <span className="text-[10px] text-[#6E5D52] font-semibold">
+                                (Paid: {appt.paidAmount} ETB)
+                              </span>
+                            )}
                             {isRefundPending && (
                               <span className="text-[9.5px] font-extrabold font-mono text-amber-800 bg-amber-50 border border-amber-300 px-1.5 py-0.5 rounded">
                                 Refund Pending
@@ -1062,43 +1569,90 @@ export default function BarberDashboardPage() {
                                 Refunded
                               </span>
                             )}
+                            {appt.additionalPaymentStatus === 'Pending Verification' && (
+                              <span className="text-[9.5px] font-mono font-black text-amber-900 bg-amber-100 border border-amber-300 px-1.5 py-0.5 rounded">
+                                ADDITIONAL +{appt.additionalSubmittedAmount || appt.remainingAmount} ETB SUBMITTED
+                              </span>
+                            )}
+                            {(appt.refundStatus === 'Refund Requested' || (Number(appt.refundAmount) > 0 && appt.refundStatus !== 'Refund Completed' && appt.refundStatus !== 'Completed')) && (
+                              <span className="text-[9.5px] font-mono font-black text-rose-900 bg-rose-100 border border-rose-300 px-1.5 py-0.5 rounded block mt-0.5">
+                                REFUND {appt.refundAmount} ETB DUE ({appt.refundMethod?.toUpperCase()}: {appt.refundAccount || 'No account'})
+                              </span>
+                            )}
                           </div>
                         </div>
                       </div>
 
                       {/* Right: Payment Verification, Receipt Eye Icon & Chair Status Controls (Cols 9-12, right-aligned) */}
-                      <div className="col-span-4 flex items-center justify-end gap-2 flex-wrap xl:flex-nowrap min-w-0">
+                      <div className="col-span-4 flex items-center justify-end gap-2 min-w-0">
                         
-                        {/* Payment Verification Button */}
-                        <button
-                          type="button"
-                          onClick={() => handleTogglePaymentVerification(appt)}
-                          className={`inline-flex items-center justify-center gap-1.5 px-3 py-2.5 rounded-2xl text-xs font-extrabold uppercase tracking-wider transition-all cursor-pointer border shadow-xs flex-shrink-0 ${
-                            isVerified
-                              ? 'bg-emerald-50 text-emerald-800 border-emerald-300 hover:bg-emerald-100 shadow-emerald-500/10'
-                              : 'bg-[#FAF2E3] text-[#8C4717] border-[#E5A93C]/70 hover:bg-[#FAF0DD] shadow-amber-500/10'
-                          }`}
-                          title="Click to toggle payment verification"
-                        >
-                          {isVerified ? (
-                            <>
-                              <CheckCircle2 className="w-3.5 h-3.5 text-emerald-600 stroke-[2.5]" />
-                              <span>Verified ✓</span>
-                            </>
+                        {/* Primary Payment / Refund Verification Action Button */}
+                        {appt.refundStatus === 'Refund Requested' || (Number(appt.refundAmount) > 0 && appt.refundStatus !== 'Refund Completed' && appt.refundStatus !== 'Completed') ? (
+                          <button
+                            type="button"
+                            onClick={() => handleCompleteRefund(appt)}
+                            className="inline-flex items-center gap-1 px-3 py-2 rounded-xl bg-rose-600 hover:bg-rose-500 text-white text-xs font-black uppercase tracking-wider transition-all cursor-pointer shadow-xs flex-shrink-0"
+                            title="Mark 75% refund paid"
+                          >
+                            <Check className="w-3.5 h-3.5" />
+                            <span>Mark Refund Paid</span>
+                          </button>
+                        ) : appt.additionalPaymentStatus === 'Pending Verification' ? (
+                          isOrigVerified ? (
+                            <button
+                              type="button"
+                              onClick={() => handleVerifyAdditionalPayment(appt)}
+                              className="inline-flex items-center gap-1.5 px-3 py-2 rounded-xl bg-amber-500 hover:bg-amber-400 text-black text-xs font-black uppercase tracking-wider transition-all cursor-pointer shadow-xs flex-shrink-0"
+                              title="Verify customer additional payment proof"
+                            >
+                              <CheckCircle2 className="w-3.5 h-3.5" />
+                              <span>Verify +{appt.additionalSubmittedAmount || appt.remainingAmount} ETB</span>
+                            </button>
                           ) : (
-                            <>
-                              <Clock className="w-3.5 h-3.5 text-[#C88A22]" />
-                              <span>Verify Payment</span>
-                            </>
-                          )}
-                        </button>
+                            <button
+                              type="button"
+                              onClick={() => handleVerifyAllPayments(appt)}
+                              className="inline-flex items-center gap-1.5 px-3 py-2 rounded-xl bg-amber-500 hover:bg-amber-400 text-black text-xs font-black uppercase tracking-wider transition-all cursor-pointer shadow-xs flex-shrink-0"
+                              title="Verify all payments (Original + Additional)"
+                            >
+                              <CheckCircle2 className="w-3.5 h-3.5" />
+                              <span>Verify All ({appt.price || appt.amountPaid} ETB)</span>
+                            </button>
+                          )
+                        ) : (
+                          <button
+                            type="button"
+                            onClick={() => handleTogglePaymentVerification(appt)}
+                            className={`inline-flex items-center justify-center gap-1.5 px-3 py-2 rounded-xl text-xs font-extrabold uppercase tracking-wider transition-all cursor-pointer border shadow-xs flex-shrink-0 ${
+                              isVerified
+                                ? 'bg-emerald-50 text-emerald-800 border-emerald-300 hover:bg-emerald-100 shadow-emerald-500/10'
+                                : 'bg-[#FAF2E3] text-[#8C4717] border-[#E5A93C]/70 hover:bg-[#FAF0DD] shadow-amber-500/10'
+                            }`}
+                            title="Click to toggle payment verification"
+                          >
+                            {isVerified ? (
+                              <>
+                                <CheckCircle2 className="w-3.5 h-3.5 text-emerald-600 stroke-[2.5]" />
+                                <span>Verified ✓</span>
+                              </>
+                            ) : (
+                              <>
+                                <Clock className="w-3.5 h-3.5 text-[#C88A22]" />
+                                <span>Verify Payment</span>
+                              </>
+                            )}
+                          </button>
+                        )}
 
                         {/* View Receipt Button */}
                         {(appt.receiptPreview || appt.receiptFileName || appt.paymentMethod === 'cbe' || appt.paymentMethod === 'telebirr') && (
                           <button
                             type="button"
-                            onClick={() => setActiveReceiptModal(appt)}
-                            className="inline-flex items-center gap-1 px-2.5 py-2.5 rounded-2xl border border-[#E5A93C]/60 hover:border-[#E5A93C] bg-[#FAF6F1] hover:bg-white text-[#1E1915] transition-all cursor-pointer shadow-xs hover:shadow-md group flex-shrink-0"
+                            onClick={() => {
+                              setActiveReceiptModal(appt);
+                              setStaffReceiptTab('original');
+                            }}
+                            className="inline-flex items-center gap-1 px-3 py-2 rounded-xl border border-[#E5A93C]/60 hover:border-[#E5A93C] bg-[#FAF6F1] hover:bg-white text-[#1E1915] transition-all cursor-pointer shadow-xs hover:shadow-md group flex-shrink-0"
                             title="View uploaded payment receipt screenshot"
                           >
                             <Eye className="w-3.5 h-3.5 text-[#C88A22] group-hover:scale-110 transition-transform" />
@@ -1111,7 +1665,7 @@ export default function BarberDashboardPage() {
                           <select
                             value={appt.status || appt.bookingStatus || 'Confirmed'}
                             onChange={(e) => handleStatusChange(appt, e.target.value)}
-                            className={`px-3 py-2.5 rounded-2xl text-xs font-extrabold outline-none border cursor-pointer transition-all shadow-xs ${
+                            className={`px-3 py-2 rounded-xl text-xs font-extrabold outline-none border cursor-pointer transition-all shadow-xs ${
                               isInChair
                                 ? 'bg-[#140F0C] text-[#FAF6F1] border-[#E5A93C] ring-2 ring-[#E5A93C]/20 font-black'
                                 : isCompleted
@@ -1148,120 +1702,397 @@ export default function BarberDashboardPage() {
       </main>
 
       {/* ── High-Definition Receipt Modal Lightbox ──────────────── */}
-      {activeReceiptModal && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center p-3 sm:p-6 bg-black/90 backdrop-blur-md animate-[fadeIn_0.15s_ease-out]">
-          <div className="bg-[#140F0C] text-white rounded-2xl sm:rounded-3xl max-w-xl sm:max-w-2xl w-full border border-[#E5A93C]/40 shadow-2xl overflow-hidden flex flex-col max-h-[92vh] animate-[scaleUp_0.15s_ease-out]">
-            
-            {/* Modal Header */}
-            <div className="p-3.5 sm:p-5 border-b border-white/10 flex items-center justify-between bg-black/60 flex-shrink-0">
-              <div className="flex items-center gap-2.5 sm:gap-3 min-w-0">
-                <div className="w-8 h-8 sm:w-10 sm:h-10 rounded-xl sm:rounded-2xl bg-[#E5A93C]/20 border border-[#E5A93C]/50 flex items-center justify-center text-[#E5A93C] shadow-md flex-shrink-0">
-                  <FileCheck2 className="w-4 h-4 sm:w-5 sm:h-5" />
-                </div>
-                <div className="min-w-0">
-                  <h3 className="font-extrabold text-xs sm:text-base text-white font-['Cinzel',serif] tracking-wide flex items-center gap-1.5 sm:gap-2 flex-wrap">
-                    <span>Customer Receipt</span>
-                    {activeReceiptModal.paymentStatus === 'Verified' ? (
-                      <span className="text-[9px] sm:text-[10px] font-mono px-2 py-0.2 rounded-full bg-emerald-500/20 text-emerald-400 border border-emerald-500/40 font-bold">
-                        VERIFIED ✓
-                      </span>
-                    ) : (
-                      <span className="text-[9px] sm:text-[10px] font-mono px-2 py-0.2 rounded-full bg-amber-500/20 text-amber-300 border border-amber-500/40 font-bold">
-                        PENDING REVIEW
-                      </span>
-                    )}
-                  </h3>
-                  <span className="text-[10px] sm:text-[11px] text-[#C5B9AB] font-mono truncate block">
-                    Ref: <strong className="text-white">{activeReceiptModal.ref}</strong> • {activeReceiptModal.customerName}
-                  </span>
-                </div>
-              </div>
-              
-              <button
-                onClick={() => setActiveReceiptModal(null)}
-                className="p-1.5 sm:p-2 rounded-xl text-[#A8988B] hover:text-white hover:bg-white/10 transition-colors cursor-pointer flex-shrink-0"
-                title="Close Receipt Preview"
-              >
-                <X className="w-5 h-5" />
-              </button>
-            </div>
+      {activeReceiptModal && (() => {
+        const fullPrice = Number(activeReceiptModal.price) || 0;
+        const origPrice = activeReceiptModal.originalPrice !== undefined ? Number(activeReceiptModal.originalPrice) : fullPrice;
+        const addDiff = Math.max(0, fullPrice - origPrice);
+        const isUpgradeAppointment = Boolean(
+          activeReceiptModal.isEdited &&
+          (activeReceiptModal.adjustmentType === 'additional_payment' || addDiff > 0)
+        );
+        const hasDualReceipts = Boolean(
+          isUpgradeAppointment ||
+          activeReceiptModal.additionalReceiptPreview ||
+          getReceiptImage(`${activeReceiptModal.ref}_additional`) ||
+          getReceiptImage(`${activeReceiptModal.id}_additional`) ||
+          getReceiptImage(`${activeReceiptModal.bookingReference}_additional`) ||
+          (typeof localStorage !== 'undefined' && (localStorage.getItem(`nhatty_active_additional_${activeReceiptModal.ref}`) || localStorage.getItem(`nhatty_active_additional_${activeReceiptModal.id}`))) ||
+          activeReceiptModal.additionalPaymentStatus === 'Pending Verification' ||
+          activeReceiptModal.additionalPaymentStatus === 'Verified'
+        );
 
-            {/* Modal Body / High-Definition Image Viewport */}
-            <div className="p-3.5 sm:p-5 space-y-3 sm:space-y-4 overflow-y-auto flex-1">
-              <div className="rounded-xl sm:rounded-2xl overflow-hidden border border-white/10 bg-black/80 max-h-[48vh] sm:max-h-[58vh] min-h-[180px] flex items-center justify-center p-1.5 sm:p-2 shadow-inner">
-                {(() => {
-                  const previewSrc = activeReceiptModal.receiptPreview || getReceiptImage(activeReceiptModal.ref || activeReceiptModal.id || activeReceiptModal.bookingReference);
-                  return previewSrc ? (
-                    <img
-                      src={previewSrc}
-                      alt="Payment receipt proof"
-                      className="max-h-[46vh] sm:max-h-[55vh] w-auto max-w-full object-contain rounded-lg sm:rounded-xl shadow-2xl"
-                      style={{ imageRendering: 'auto' }}
+        const isOrigVerified = activeReceiptModal.originalPaymentStatus === 'Verified' || (activeReceiptModal.paymentStatus === 'Verified' && !activeReceiptModal.isEdited);
+        const isAddVerified = activeReceiptModal.additionalPaymentStatus === 'Verified';
+        const isBothVerified = isOrigVerified && isAddVerified;
+        const isAllVerified = hasDualReceipts ? isBothVerified : (activeReceiptModal.paymentStatus === 'Verified');
+
+        const isAddTab = staffReceiptTab === 'additional';
+        const addImg = activeReceiptModal.additionalReceiptPreview || 
+          getReceiptImage(`${activeReceiptModal.ref}_additional`) || 
+          getReceiptImage(`${activeReceiptModal.id}_additional`) ||
+          getReceiptImage(`${activeReceiptModal.bookingReference}_additional`) ||
+          (typeof localStorage !== 'undefined' ? (localStorage.getItem(`nhatty_active_additional_${activeReceiptModal.ref}`) || localStorage.getItem(`nhatty_active_additional_${activeReceiptModal.id}`)) : null);
+        const origImg = activeReceiptModal.originalReceiptPreview || activeReceiptModal.receiptPreview || getReceiptImage(activeReceiptModal.ref || activeReceiptModal.id || activeReceiptModal.bookingReference);
+        const currentPreviewSrc = isAddTab ? addImg : origImg;
+
+        return (
+          <div className="fixed inset-0 z-50 flex items-center justify-center p-3 sm:p-6 bg-black/90 backdrop-blur-md animate-[fadeIn_0.15s_ease-out]">
+            <div className="bg-[#140F0C] text-white rounded-2xl sm:rounded-3xl max-w-xl sm:max-w-2xl w-full border border-[#E5A93C]/40 shadow-2xl overflow-hidden flex flex-col max-h-[92vh] animate-[scaleUp_0.15s_ease-out]">
+              
+              {/* Modal Header */}
+              <div className="p-3.5 sm:p-5 border-b border-white/10 flex items-center justify-between bg-black/60 flex-shrink-0">
+                <div className="flex items-center gap-2.5 sm:gap-3 min-w-0">
+                  <div className="w-8 h-8 sm:w-10 sm:h-10 rounded-xl sm:rounded-2xl bg-[#E5A93C]/20 border border-[#E5A93C]/50 flex items-center justify-center text-[#E5A93C] shadow-md flex-shrink-0">
+                    <FileCheck2 className="w-4 h-4 sm:w-5 sm:h-5" />
+                  </div>
+                  <div className="min-w-0">
+                    <h3 className="font-extrabold text-xs sm:text-base text-white font-['Cinzel',serif] tracking-wide flex items-center gap-1.5 sm:gap-2 flex-wrap">
+                      <span>{hasDualReceipts ? 'Service Changed — Review Receipts' : 'New Booking Payment Receipt'}</span>
+                      {isAllVerified ? (
+                        <span className="text-[9px] sm:text-[10px] font-mono px-2 py-0.5 rounded-full bg-emerald-500/20 text-emerald-400 border border-emerald-500/40 font-bold">
+                          VERIFIED ✓
+                        </span>
+                      ) : (
+                        <span className="text-[9px] sm:text-[10px] font-mono px-2 py-0.5 rounded-full bg-amber-500/20 text-amber-300 border border-amber-500/40 font-bold">
+                          PENDING REVIEW
+                        </span>
+                      )}
+                    </h3>
+                    <span className="text-[10px] sm:text-[11px] text-[#C5B9AB] font-mono truncate block">
+                      Ref: <strong className="text-white">{activeReceiptModal.ref}</strong> • {activeReceiptModal.customerName}
+                      {hasDualReceipts && (
+                        <span className="text-[#E5A93C] ml-1">
+                          ({activeReceiptModal.originalServiceName || 'Original'} {origPrice} ETB ➔ {activeReceiptModal.serviceName} {fullPrice} ETB)
+                        </span>
+                      )}
+                    </span>
+                  </div>
+                </div>
+                
+                <button
+                  onClick={() => setActiveReceiptModal(null)}
+                  className="p-1.5 sm:p-2 rounded-xl text-[#A8988B] hover:text-white hover:bg-white/10 transition-colors cursor-pointer flex-shrink-0"
+                  title="Close Receipt Preview"
+                >
+                  <X className="w-5 h-5" />
+                </button>
+              </div>
+
+              {/* Modal Body / High-Definition Image Viewport */}
+              <div className="p-3.5 sm:p-5 space-y-3 sm:space-y-4 overflow-y-auto flex-1">
+                
+                {/* Dual Receipt Tabs (Only for genuine upgrades / edited appointments) */}
+                {hasDualReceipts && (
+                  <div className="grid grid-cols-2 gap-2 p-1.5 bg-white/10 rounded-2xl">
+                    {/* Tab 1: Original Receipt */}
+                    <button
+                      type="button"
+                      onClick={() => setStaffReceiptTab('original')}
+                      className={`py-2 px-3 rounded-xl text-xs font-bold transition-all cursor-pointer flex flex-col items-center gap-1 ${
+                        !isAddTab
+                          ? 'bg-[#E5A93C] text-black shadow-md font-black'
+                          : 'text-[#C5B9AB] hover:text-white bg-white/5'
+                      }`}
+                    >
+                      <div className="flex items-center gap-1.5 flex-wrap justify-center">
+                        <span>1. Original Receipt</span>
+                        {isOrigVerified ? (
+                          <span className={`text-[8.5px] sm:text-[9px] font-mono px-1.5 py-0.2 rounded-full font-bold ${
+                            !isAddTab ? 'bg-black text-[#E5A93C]' : 'bg-emerald-950 text-emerald-300 border border-emerald-500/40'
+                          }`}>
+                            ✓ Verified
+                          </span>
+                        ) : (
+                          <span className={`text-[8.5px] sm:text-[9px] font-mono px-1.5 py-0.2 rounded-full font-bold ${
+                            !isAddTab ? 'bg-black text-[#E5A93C]' : 'bg-amber-950 text-amber-300 border border-amber-500/40'
+                          }`}>
+                            ⏳ Pending
+                          </span>
+                        )}
+                      </div>
+                      <span className="text-[10.5px] sm:text-[11px] font-mono opacity-90">
+                        {origPrice} ETB
+                      </span>
+                    </button>
+
+                    {/* Tab 2: Additional Upgrade Receipt */}
+                    <button
+                      type="button"
+                      onClick={() => setStaffReceiptTab('additional')}
+                      className={`py-2 px-3 rounded-xl text-xs font-bold transition-all cursor-pointer flex flex-col items-center gap-1 ${
+                        isAddTab
+                          ? 'bg-[#E5A93C] text-black shadow-md font-black'
+                          : 'text-[#C5B9AB] hover:text-white bg-white/5'
+                      }`}
+                    >
+                      <div className="flex items-center gap-1.5 flex-wrap justify-center">
+                        <span>2. Additional Receipt</span>
+                        {isAddVerified ? (
+                          <span className={`text-[8.5px] sm:text-[9px] font-mono px-1.5 py-0.2 rounded-full font-bold ${
+                            isAddTab ? 'bg-black text-[#E5A93C]' : 'bg-emerald-950 text-emerald-300 border border-emerald-500/40'
+                          }`}>
+                            ✓ Verified
+                          </span>
+                        ) : activeReceiptModal.additionalPaymentStatus === 'Pending Verification' || addImg ? (
+                          <span className={`text-[8.5px] sm:text-[9px] font-mono px-1.5 py-0.2 rounded-full font-bold ${
+                            isAddTab ? 'bg-black text-[#E5A93C]' : 'bg-amber-950 text-amber-300 border border-amber-500/40'
+                          }`}>
+                            ⏳ Pending
+                          </span>
+                        ) : (
+                          <span className={`text-[8.5px] sm:text-[9px] font-mono px-1.5 py-0.2 rounded-full font-bold ${
+                            isAddTab ? 'bg-black text-[#E5A93C]' : 'bg-slate-800 text-slate-300 border border-slate-600'
+                          }`}>
+                            Due
+                          </span>
+                        )}
+                      </div>
+                      <span className="text-[10.5px] sm:text-[11px] font-mono opacity-90">
+                        +{activeReceiptModal.additionalSubmittedAmount || activeReceiptModal.remainingAmount || addDiff} ETB
+                      </span>
+                    </button>
+                  </div>
+                )}
+
+                {/* Image Viewport */}
+                <div className="rounded-xl sm:rounded-2xl overflow-hidden border border-white/10 bg-black/80 min-h-[180px] flex items-center justify-center p-1.5 sm:p-2 shadow-inner">
+                  {currentPreviewSrc ? (
+                    <ReceiptZoomViewer
+                      src={currentPreviewSrc}
+                      alt={isAddTab ? "Additional payment receipt" : "Original payment receipt"}
+                      fileName={isAddTab ? (activeReceiptModal.additionalReceiptFileName || 'additional_receipt.png') : (activeReceiptModal.receiptFileName || 'payment_receipt.png')}
+                      theme="dark"
+                      maxHeightClass="max-h-[44vh] sm:max-h-[50vh]"
                     />
                   ) : (
-                    <div className="py-10 sm:py-16 text-center text-xs text-[#A8988B] space-y-2">
+                    <div className="py-10 sm:py-16 text-center text-xs text-[#A8988B] space-y-2 max-w-sm mx-auto px-4">
                       <AlertCircle className="w-6 h-6 sm:w-7 sm:h-7 text-[#E5A93C] mx-auto opacity-70" />
-                      <p className="font-bold text-white text-xs sm:text-sm">Receipt Attachment Registered</p>
-                      <p className="font-mono text-[10px] sm:text-[11px] text-[#C5B9AB]">{activeReceiptModal.receiptFileName || 'payment_receipt.png'}</p>
-                      <p className="text-[10px] sm:text-[11px] text-[#8C7A6D]">Transaction verified via reference {activeReceiptModal.ref}</p>
+                      <p className="font-bold text-white text-xs sm:text-sm">
+                        {isAddTab
+                          ? 'Additional Receipt Screenshot Not Yet Uploaded'
+                          : 'Receipt Attachment Registered'}
+                      </p>
+                      <p className="font-mono text-[10px] sm:text-[11px] text-[#C5B9AB]">
+                        {isAddTab
+                          ? (activeReceiptModal.additionalReceiptFileName || 'Waiting for customer upload')
+                          : (activeReceiptModal.receiptFileName || 'payment_receipt.png')}
+                      </p>
+                      <p className="text-[10px] sm:text-[11px] text-[#8C7A6D]">
+                        {isAddTab
+                          ? `Customer upgraded to ${activeReceiptModal.serviceName} (+${addDiff} ETB balance due).`
+                          : `Initial transaction for ${activeReceiptModal.ref} (${origPrice} ETB).`}
+                      </p>
                     </div>
-                  );
-                })()}
-              </div>
-
-              {/* Receipt Metadata Breakdown */}
-              <div className="grid grid-cols-3 gap-2 text-xs bg-white/[0.04] p-2.5 sm:p-3.5 rounded-xl sm:rounded-2xl border border-white/10">
-                <div>
-                  <span className="text-[9px] sm:text-[10px] text-[#A8988B] uppercase font-mono tracking-wider block">Transfer Channel</span>
-                  <span className="font-extrabold text-white uppercase text-[11px] sm:text-sm truncate block">{activeReceiptModal.paymentMethod}</span>
-                </div>
-                <div>
-                  <span className="text-[9px] sm:text-[10px] text-[#A8988B] uppercase font-mono tracking-wider block">Amount Paid</span>
-                  <span className="font-extrabold text-[#E5A93C] text-[11px] sm:text-sm font-mono truncate block">{activeReceiptModal.price || activeReceiptModal.amountPaid} ETB</span>
-                </div>
-                <div>
-                  <span className="text-[9px] sm:text-[10px] text-[#A8988B] uppercase font-mono tracking-wider block">Customer Phone</span>
-                  <span className="font-bold text-white font-mono text-[11px] sm:text-sm truncate block">{activeReceiptModal.customerPhone || 'N/A'}</span>
-                </div>
-              </div>
-
-              {/* Action Buttons */}
-              <div className="flex items-center gap-2 sm:gap-3 pt-1">
-                <button
-                  type="button"
-                  onClick={() => handleTogglePaymentVerification(activeReceiptModal)}
-                  className={`flex-1 min-h-[44px] py-2.5 sm:py-3 px-3 sm:px-4 rounded-xl sm:rounded-2xl text-xs font-extrabold uppercase tracking-wider transition-all cursor-pointer flex items-center justify-center gap-1.5 sm:gap-2 shadow-md ${
-                    activeReceiptModal.paymentStatus === 'Verified'
-                      ? 'bg-amber-500/20 text-amber-300 border border-amber-500/40 hover:bg-amber-500/30'
-                      : 'bg-gradient-to-r from-[#E5A93C] via-[#D97706] to-[#B45309] text-[#140F0C] font-black hover:brightness-110'
-                  }`}
-                >
-                  {activeReceiptModal.paymentStatus === 'Verified' ? (
-                    <>
-                      <RotateCcw className="w-3.5 h-3.5" />
-                      <span>Revert to Pending</span>
-                    </>
-                  ) : (
-                    <>
-                      <Check className="w-4 h-4 stroke-[3]" />
-                      <span>Verify Receipt Now</span>
-                    </>
                   )}
-                </button>
+                </div>
 
-                <button
-                  type="button"
-                  onClick={() => setActiveReceiptModal(null)}
-                  className="min-h-[44px] px-4 sm:px-5 py-2.5 sm:py-3 rounded-xl sm:rounded-2xl border border-white/15 text-xs font-extrabold text-white hover:bg-white/10 transition-colors cursor-pointer"
-                >
-                  Close
-                </button>
+                {/* Receipt Metadata Breakdown */}
+                <div className="grid grid-cols-3 gap-2 text-xs bg-white/[0.04] p-2.5 sm:p-3.5 rounded-xl sm:rounded-2xl border border-white/10">
+                  <div>
+                    <span className="text-[9px] sm:text-[10px] text-[#A8988B] uppercase font-mono tracking-wider block">Transfer Channel</span>
+                    <span className="font-extrabold text-white uppercase text-[11px] sm:text-sm truncate block">{activeReceiptModal.paymentMethod || 'Telebirr / CBE'}</span>
+                  </div>
+                  <div>
+                    <span className="text-[9px] sm:text-[10px] text-[#A8988B] uppercase font-mono tracking-wider block">
+                      {hasDualReceipts ? (isAddTab ? 'Additional Proof' : 'Original Amount') : 'Amount Submitted'}
+                    </span>
+                    <span className="font-extrabold text-[#E5A93C] text-[11px] sm:text-sm font-mono truncate block">
+                      {hasDualReceipts
+                        ? (isAddTab ? `+${activeReceiptModal.additionalSubmittedAmount || activeReceiptModal.remainingAmount || addDiff} ETB` : `${origPrice} ETB`)
+                        : (origPrice > fullPrice ? `${origPrice} ETB` : `${fullPrice} ETB`)}
+                    </span>
+                    {!hasDualReceipts && (origPrice > fullPrice || activeReceiptModal.overpaymentAmount > 0) && (() => {
+                      const changeAmt = activeReceiptModal.overpaymentAmount || (origPrice - fullPrice);
+                      const isHandedOver = Boolean(activeReceiptModal.shopRefundHandedOver);
+                      return (
+                        <div className="mt-1">
+                          <div className="flex items-center gap-1.5 relative">
+                            <select
+                              value={isHandedOver ? 'returned' : 'pending'}
+                              onChange={(e) => handleToggleShopRefund(activeReceiptModal, e.target.value === 'returned')}
+                              className={`appearance-none pl-2 pr-5 py-0.5 rounded text-[9.5px] font-mono font-bold uppercase transition-all cursor-pointer border outline-none ${
+                                isHandedOver
+                                  ? 'bg-emerald-500/20 text-emerald-300 border-emerald-500/40 hover:bg-emerald-500/30'
+                                  : 'bg-rose-500/20 text-rose-300 border-rose-500/40 hover:bg-rose-500/30'
+                              }`}
+                            >
+                              <option value="pending" className="bg-[#1C1613] text-rose-300 font-bold">
+                                ❌ Return {changeAmt} ETB Change
+                              </option>
+                              <option value="returned" className="bg-[#1C1613] text-emerald-300 font-bold">
+                                ✓ {changeAmt} ETB Returned
+                              </option>
+                            </select>
+                            <ChevronDown className={`w-3 h-3 pointer-events-none absolute right-1 ${isHandedOver ? 'text-emerald-400' : 'text-rose-400'}`} />
+                          </div>
+                        </div>
+                      );
+                    })()}
+                  </div>
+                  <div>
+                    <span className="text-[9px] sm:text-[10px] text-[#A8988B] uppercase font-mono tracking-wider block">
+                      {hasDualReceipts ? (isAddTab ? 'Additional Status' : 'Original Status') : 'Payment Status'}
+                    </span>
+                    <span className="font-bold text-white font-mono text-[11px] sm:text-sm truncate block">
+                      {hasDualReceipts
+                        ? (isAddTab ? (activeReceiptModal.additionalPaymentStatus || 'Pending') : (isOrigVerified ? 'Verified ✓' : 'Pending'))
+                        : (activeReceiptModal.paymentStatus === 'Verified' ? 'Verified ✓' : 'Pending Review')}
+                    </span>
+                  </div>
+                </div>
+
+                {/* Action Controls: Independent verification of original, additional, or both */}
+                <div className="space-y-2 pt-1">
+                  {hasDualReceipts ? (
+                    <div className="space-y-2">
+                      {/* Top Row: Tab-Specific Single Verification Toggle */}
+                      <div className="flex items-center gap-2">
+                        {isAddTab ? (
+                          isAddVerified ? (
+                            <button
+                              type="button"
+                              onClick={() => handleRevertAdditionalPayment(activeReceiptModal)}
+                              className="flex-1 min-h-[42px] py-2 px-3 rounded-xl text-xs font-bold uppercase tracking-wider transition-all cursor-pointer flex items-center justify-center gap-1.5 bg-amber-500/20 text-amber-300 border border-amber-500/40 hover:bg-amber-500/30"
+                            >
+                              <RotateCcw className="w-3.5 h-3.5" />
+                              <span>Revert Additional to Pending</span>
+                            </button>
+                          ) : (
+                            <button
+                              type="button"
+                              onClick={() => handleVerifyAdditionalPayment(activeReceiptModal)}
+                              className="flex-1 min-h-[42px] py-2 px-3 rounded-xl text-xs font-black uppercase tracking-wider transition-all cursor-pointer flex items-center justify-center gap-1.5 bg-amber-500 hover:bg-amber-400 text-black shadow-md"
+                            >
+                              <Check className="w-4 h-4 stroke-[3]" />
+                              <span>Verify Additional Only (+{activeReceiptModal.additionalSubmittedAmount || activeReceiptModal.remainingAmount || addDiff} ETB)</span>
+                            </button>
+                          )
+                        ) : (
+                          isOrigVerified ? (
+                            <button
+                              type="button"
+                              onClick={() => handleRevertOriginalPayment(activeReceiptModal)}
+                              className="flex-1 min-h-[42px] py-2 px-3 rounded-xl text-xs font-bold uppercase tracking-wider transition-all cursor-pointer flex items-center justify-center gap-1.5 bg-amber-500/20 text-amber-300 border border-amber-500/40 hover:bg-amber-500/30"
+                            >
+                              <RotateCcw className="w-3.5 h-3.5" />
+                              <span>Revert Original to Pending</span>
+                            </button>
+                          ) : (
+                            <button
+                              type="button"
+                              onClick={() => handleVerifyOriginalPayment(activeReceiptModal)}
+                              className="flex-1 min-h-[42px] py-2 px-3 rounded-xl text-xs font-black uppercase tracking-wider transition-all cursor-pointer flex items-center justify-center gap-1.5 bg-[#E5A93C] hover:bg-[#F59E0B] text-black shadow-md"
+                            >
+                              <Check className="w-4 h-4 stroke-[3]" />
+                              <span>Verify Original Only ({origPrice} ETB)</span>
+                            </button>
+                          )
+                        )}
+                      </div>
+
+                      {/* Bottom Row: Verify Both Receipts + Close Button */}
+                      <div className="flex items-center gap-2">
+                        {!isBothVerified ? (
+                          <button
+                            type="button"
+                            onClick={() => handleVerifyAllPayments(activeReceiptModal)}
+                            className="flex-1 min-h-[44px] py-2.5 px-4 rounded-xl text-xs font-black uppercase tracking-wider transition-all cursor-pointer flex items-center justify-center gap-1.5 bg-gradient-to-r from-[#E5A93C] via-[#D97706] to-[#B45309] text-[#140F0C] hover:brightness-110 shadow-md"
+                          >
+                            <CheckCircle2 className="w-4 h-4 stroke-[2.5]" />
+                            <span>Verify Both Receipts ({fullPrice} ETB)</span>
+                          </button>
+                        ) : (
+                          <div className="flex-1 min-h-[44px] py-2.5 px-4 rounded-xl text-xs font-bold text-emerald-400 bg-emerald-500/20 border border-emerald-500/40 flex items-center justify-center gap-1.5">
+                            <CheckCircle2 className="w-4 h-4 text-emerald-400" />
+                            <span>Both Receipts Fully Verified ✓ ({fullPrice} ETB)</span>
+                          </div>
+                        )}
+
+                        <button
+                          type="button"
+                          onClick={() => setActiveReceiptModal(null)}
+                          className="min-h-[44px] px-4 sm:px-5 py-2.5 rounded-xl border border-white/15 text-xs font-extrabold text-white hover:bg-white/10 transition-colors cursor-pointer"
+                        >
+                          Close
+                        </button>
+                      </div>
+                    </div>
+                  ) : (
+                    /* Single Receipt Controls for New Bookings & Downgrades */
+                    <div className="flex items-center gap-2 sm:gap-3 flex-wrap sm:flex-nowrap">
+                      <button
+                        type="button"
+                        onClick={() => handleTogglePaymentVerification(activeReceiptModal)}
+                        className={`flex-1 min-h-[44px] py-2.5 sm:py-3 px-3 sm:px-4 rounded-xl sm:rounded-2xl text-xs font-extrabold uppercase tracking-wider transition-all cursor-pointer flex items-center justify-center gap-1.5 sm:gap-2 shadow-md ${
+                          activeReceiptModal.paymentStatus === 'Verified'
+                            ? 'bg-amber-500/20 text-amber-300 border border-amber-500/40 hover:bg-amber-500/30'
+                            : 'bg-gradient-to-r from-[#E5A93C] via-[#D97706] to-[#B45309] text-[#140F0C] font-black hover:brightness-110'
+                        }`}
+                      >
+                        {activeReceiptModal.paymentStatus === 'Verified' ? (
+                          <>
+                            <RotateCcw className="w-3.5 h-3.5" />
+                            <span>Revert to Pending</span>
+                          </>
+                        ) : (
+                          <>
+                            <Check className="w-4 h-4 stroke-[3]" />
+                            <span>
+                              {origPrice > fullPrice 
+                                ? `Verify Receipt (${origPrice} ETB)` 
+                                : `Verify Receipt Now (${fullPrice} ETB)`}
+                            </span>
+                          </>
+                        )}
+                      </button>
+
+                      {/* If service downgraded with cash change due */}
+                      {(origPrice > fullPrice || activeReceiptModal.overpaymentAmount > 0) && (() => {
+                        const changeAmt = activeReceiptModal.overpaymentAmount || (origPrice - fullPrice);
+                        const isHandedOver = Boolean(activeReceiptModal.shopRefundHandedOver);
+                        return (
+                          <button
+                            type="button"
+                            onClick={() => handleToggleShopRefund(activeReceiptModal)}
+                            className={`min-h-[44px] py-2.5 sm:py-3 px-3 sm:px-4 rounded-xl sm:rounded-2xl text-xs font-extrabold uppercase tracking-wider transition-all cursor-pointer flex items-center justify-center gap-1.5 shadow-md border ${
+                              isHandedOver
+                                ? 'bg-emerald-500/20 text-emerald-300 border-emerald-500/40 hover:bg-emerald-500/30'
+                                : 'bg-rose-600 hover:bg-rose-500 text-white border-rose-500'
+                            }`}
+                            title={isHandedOver ? 'Change returned! Click to revert' : 'Click to confirm cash change handed over to customer'}
+                          >
+                            {isHandedOver ? (
+                              <>
+                                <Check className="w-3.5 h-3.5 stroke-[3]" />
+                                <span>{changeAmt} ETB Paid ✓</span>
+                              </>
+                            ) : (
+                              <>
+                                <X className="w-3.5 h-3.5 stroke-[3]" />
+                                <span>Pay {changeAmt} ETB Change</span>
+                              </>
+                            )}
+                          </button>
+                        );
+                      })()}
+
+                      <button
+                        type="button"
+                        onClick={() => setActiveReceiptModal(null)}
+                        className="min-h-[44px] px-4 sm:px-5 py-2.5 sm:py-3 rounded-xl sm:rounded-2xl border border-white/15 text-xs font-extrabold text-white hover:bg-white/10 transition-colors cursor-pointer"
+                      >
+                        Close
+                      </button>
+                    </div>
+                  )}
+                </div>
+
               </div>
-            </div>
 
+            </div>
           </div>
-        </div>
-      )}
+        );
+      })()}
 
       {/* ── Staff Footer ───────────────────────────────────────── */}
       <footer className="py-5 border-t border-[#E6DDD1] text-center text-xs text-[#8C7A6D] bg-white/60 backdrop-blur-xs mt-8">
@@ -1275,6 +2106,8 @@ export default function BarberDashboardPage() {
         onFilterStatus={(status) => setSelectedStatusFilter(status)}
         onSearchQuery={(q) => setSearchQuery(q)}
         onSelectDate={(dateKey) => setSelectedDateKey(dateKey)}
+        appointments={appointments}
+        allAppointments={allAppointments}
       />
 
     </div>

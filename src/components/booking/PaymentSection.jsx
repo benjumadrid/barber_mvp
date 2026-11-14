@@ -16,6 +16,7 @@ import {
   ArrowRight
 } from 'lucide-react';
 import { MOCK_SERVICES } from '../../data/servicesData';
+import ReceiptZoomViewer from '../common/ReceiptZoomViewer';
 
 // ── Custom SVG / CSS Branded Emblems ────────────────────────────────
 function CBELogo() {
@@ -98,8 +99,9 @@ export default function PaymentSection({
           return;
         }
 
-        // High-definition canvas compression for crisp receipt readability without storage bloat
-        const maxDimension = 1200;
+        // Ultra high-definition canvas compression (max 1800px, 0.88 quality) for crisp receipt readability
+        // and razor-sharp zoom inspection without storage bloat
+        const maxDimension = 1800;
         let width = img.width;
         let height = img.height;
 
@@ -120,7 +122,7 @@ export default function PaymentSection({
         ctx.imageSmoothingEnabled = true;
         ctx.imageSmoothingQuality = 'high';
         ctx.drawImage(img, 0, 0, width, height);
-        const compressedDataUrl = canvas.toDataURL('image/jpeg', 0.85);
+        const compressedDataUrl = canvas.toDataURL('image/jpeg', 0.88);
 
         // Mock heuristic validation simulation
         setTimeout(() => {
@@ -478,12 +480,14 @@ export default function PaymentSection({
               </button>
             </div>
 
-            {/* Image Preview Container */}
-            <div className="relative rounded-lg overflow-hidden border border-[#E2D7C8] bg-black/5 max-h-64 flex items-center justify-center">
-              <img
+            {/* Interactive High-Definition Image Preview & Zoom Container */}
+            <div className="relative rounded-xl overflow-hidden border border-[#E2D7C8] bg-black/5 p-1 sm:p-2 flex flex-col items-center justify-center">
+              <ReceiptZoomViewer
                 src={receiptPreview}
                 alt="Payment Receipt Preview"
-                className="max-h-64 w-auto object-contain rounded-lg"
+                fileName={receiptFileName || 'payment_receipt.png'}
+                theme="light"
+                maxHeightClass="max-h-64"
               />
             </div>
 

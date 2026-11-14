@@ -26,8 +26,8 @@ export const MOCK_SERVICES = [
   { id: 'srv-2', name: 'Hair Cut + Face Treatment', price: 500, duration: '45 min', category: 'combo' },
   { id: 'srv-3', name: 'Beard Sculpting & Trim', price: 300, duration: '25 min', category: 'beard' },
   { id: 'srv-4', name: 'Nhatty VIP Royal Grooming', price: 800, duration: '60 min', category: 'vip' },
-  { id: 'srv-5', name: 'Kids Haircut (Under 12)', price: 300, duration: '25 min', category: 'kids' },
-  { id: 'srv-6', name: 'Hot Towel Royal Shave', price: 450, duration: '35 min', category: 'shave' }
+  { id: 'srv-5', name: 'Kids Haircut (Under 12)', price: 350, duration: '25 min', category: 'kids' },
+  { id: 'srv-6', name: 'Hot Towel Royal Shave', price: 350, duration: '30 min', category: 'shave' }
 ];
 
 // ── Shop Constants & Configuration ─────────────────────────────────────
@@ -143,7 +143,22 @@ export function setReceiptImage(refOrId, dataUrl) {
   } catch (e) {}
   try {
     localStorage.setItem(`nhatty_img_${cleanKey}`, dataUrl);
-  } catch (e) {}
+  } catch (e) {
+    // Quota management: prune older receipt images if localStorage is full
+    try {
+      const keysToPrune = [];
+      for (let i = 0; i < localStorage.length; i++) {
+        const k = localStorage.key(i);
+        if (k && k.startsWith('nhatty_img_') && !k.includes(cleanKey)) {
+          keysToPrune.push(k);
+        }
+      }
+      for (let i = 0; i < Math.min(keysToPrune.length, 5); i++) {
+        localStorage.removeItem(keysToPrune[i]);
+      }
+      localStorage.setItem(`nhatty_img_${cleanKey}`, dataUrl);
+    } catch (e2) {}
+  }
 }
 
 export function getReceiptImage(refOrId) {
@@ -166,6 +181,16 @@ export function getReceiptImage(refOrId) {
       return fromSession;
     }
   } catch (e) {}
+  if (cleanKey.endsWith('_additional')) {
+    const baseKey = cleanKey.replace(/_additional$/, '');
+    try {
+      const directAdd = localStorage.getItem(`nhatty_active_additional_${baseKey}`);
+      if (directAdd) {
+        receiptImageCache.set(cleanKey, directAdd);
+        return directAdd;
+      }
+    } catch (e) {}
+  }
   return null;
 }
 
@@ -224,16 +249,24 @@ export function saveBookedSlotsToStorage() {
   try {
     if (typeof localStorage !== 'undefined') {
       const entries = Array.from(bookedSlots.entries()).map(([k, v]) => {
-        if (v.receiptPreview) {
-          if (v.ref) setReceiptImage(v.ref, v.receiptPreview);
-          if (v.id) setReceiptImage(v.id, v.receiptPreview);
-          if (v.bookingReference) setReceiptImage(v.bookingReference, v.receiptPreview);
+        if (v.receiptPreview || v.originalReceiptPreview) {
+          const orig = v.originalReceiptPreview || v.receiptPreview;
+          if (v.ref) setReceiptImage(v.ref, orig);
+          if (v.id) setReceiptImage(v.id, orig);
+          if (v.bookingReference) setReceiptImage(v.bookingReference, orig);
+        }
+        if (v.additionalReceiptPreview) {
+          if (v.ref) setReceiptImage(`${v.ref}_additional`, v.additionalReceiptPreview);
+          if (v.id) setReceiptImage(`${v.id}_additional`, v.additionalReceiptPreview);
+          if (v.bookingReference) setReceiptImage(`${v.bookingReference}_additional`, v.additionalReceiptPreview);
         }
         return [
           k,
           {
             ...v,
-            receiptPreview: null // keep master array ultra-light (< 1KB per slot)
+            receiptPreview: null, // keep master array ultra-light (< 1KB per slot)
+            originalReceiptPreview: null,
+            additionalReceiptPreview: null
           }
         ];
       });
@@ -256,9 +289,16 @@ export function loadBookedSlotsFromStorage() {
         bookedSlots.clear();
         parsed.forEach(([k, v]) => {
           const cachedImg = getReceiptImage(v.ref) || getReceiptImage(v.id) || getReceiptImage(v.bookingReference);
+          const cachedAddImg = 
+            getReceiptImage(`${v.ref}_additional`) || 
+            getReceiptImage(`${v.id}_additional`) || 
+            getReceiptImage(`${v.bookingReference}_additional`) ||
+            (typeof localStorage !== 'undefined' ? (localStorage.getItem(`nhatty_active_additional_${v.ref}`) || localStorage.getItem(`nhatty_active_additional_${v.id}`)) : null);
           bookedSlots.set(k, {
             ...v,
-            receiptPreview: cachedImg || v.receiptPreview || null
+            receiptPreview: cachedImg || v.receiptPreview || null,
+            originalReceiptPreview: cachedImg || v.originalReceiptPreview || null,
+            additionalReceiptPreview: cachedAddImg || v.additionalReceiptPreview || null
           });
         });
         return;
@@ -669,7 +709,11 @@ export function bookSlot(barberId, dateStr, timeId, customerInfo) {
   const createdAt = now.toISOString();
   const editDeadline = new Date(now.getTime() + APPOINTMENT_EDIT_WINDOW_MINUTES * 60 * 1000).toISOString(); // exactly +11 minutes
 
+  const fullInitialPrice = Number(customerInfo.price) || Number(customerInfo.amountPaid) || 0;
+  const isInitialVerified = customerInfo.paymentStatus === 'Verified';
+
   const booking = {
+    ...customerInfo,
     id: `appt-${Date.now()}`,
     ref,
     bookingReference: ref,
@@ -678,6 +722,14 @@ export function bookSlot(barberId, dateStr, timeId, customerInfo) {
     customerNotes: customerInfo.notes || customerInfo.customerNotes || '',
     serviceId: customerInfo.serviceId || 'srv-1',
     serviceName: customerInfo.serviceName || 'Service',
+    // Baseline & current service tracking
+    originalServiceId: customerInfo.serviceId || 'srv-1',
+    originalServiceName: customerInfo.serviceName || 'Service',
+    originalPrice: fullInitialPrice,
+    currentServiceId: customerInfo.serviceId || 'srv-1',
+    currentServiceName: customerInfo.serviceName || 'Service',
+    currentPrice: fullInitialPrice,
+    isEdited: false, // Explicitly false for new bookings; never an edit/upgrade
     barberId: actualBarberId,
     barberName: barberObj?.name || 'Barber',
     dateStr,
@@ -687,19 +739,45 @@ export function bookSlot(barberId, dateStr, timeId, customerInfo) {
     endTime: slotObj?.endTime || '',
     timeDisplay: slotObj?.display || '',
     arrivalReminder: slotObj?.arrivalReminder || '',
-    price: customerInfo.amountPaid || customerInfo.price || 0,
-    amountPaid: customerInfo.amountPaid || customerInfo.price || 0,
-    paymentMethod: customerInfo.paymentMethod || 'cbe',
-    paymentStatus: customerInfo.paymentStatus || 'Verification Pending',
+    price: fullInitialPrice,
+    amountPaid: isInitialVerified ? fullInitialPrice : 0,
+    paidAmount: isInitialVerified ? fullInitialPrice : 0,
+    submittedAmount: fullInitialPrice,
+    remainingAmount: 0, // Brand new booking: customer submitted full price receipt, zero balance due!
+    adjustmentAmount: 0,
+    adjustmentType: 'none',
+
+    // Decoupled receipts & separate additional receipt storage
+    originalReceiptPreview: customerInfo.receiptPreview || customerInfo.originalReceiptPreview || null,
+    originalReceiptFileName: customerInfo.receiptFileName || customerInfo.originalReceiptFileName || 'receipt.png',
     receiptFileName: customerInfo.receiptFileName || 'receipt.png',
     receiptPreview: customerInfo.receiptPreview || null,
+    additionalReceiptPreview: null,
+    additionalReceiptFileName: null,
+    additionalSubmittedAmount: 0,
+    additionalPaymentStatus: 'None',
+
+    originalPaymentStatus: isInitialVerified ? 'Verified' : 'Pending Verification',
+    verifiedOriginalAmount: isInitialVerified ? fullInitialPrice : 0,
+    verifiedAdditionalAmount: 0,
+
+    // 75% Refund policy & destination details
+    refundMethod: null,
+    refundAccount: null,
+    refundAmount: 0,
+    refundFee: 0,
+    refundStatus: 'None',
+    refundRequestedAt: null,
+    refundCompletedAt: null,
+
+    paymentMethod: customerInfo.paymentMethod || 'cbe',
+    paymentStatus: isInitialVerified ? 'Verified' : 'Verification Pending',
     status: 'Confirmed',
     bookingStatus: 'Confirmed',
     createdAt,
     editDeadline,
     updatedAt: null,
     cancelledAt: null,
-    ...customerInfo,
   };
 
   // 1. Immediately cache receipt image under reference and ID
@@ -720,8 +798,16 @@ export function bookSlot(barberId, dateStr, timeId, customerInfo) {
 
 // ── Update Existing Appointment (With 11-Min Deadline & Slot Swapping) ──
 export function updateAppointment(appointmentId, newDetails) {
-  const current = getActiveBooking();
+  let current = getActiveBooking();
   if (!current || (current.id !== appointmentId && current.ref !== appointmentId)) {
+    for (const v of bookedSlots.values()) {
+      if (v.id === appointmentId || v.ref === appointmentId || v.bookingReference === appointmentId) {
+        current = v;
+        break;
+      }
+    }
+  }
+  if (!current) {
     return { success: false, error: 'Appointment not found.' };
   }
 
@@ -742,6 +828,14 @@ export function updateAppointment(appointmentId, newDetails) {
   const newTimeId = newDetails.timeId || oldTimeId;
   const newKey = `${newBarberId}:${newDateStr}:${newTimeId}`;
 
+  // Validate canonical service: only allow real existing services
+  if (newDetails.serviceId) {
+    const isValidService = MOCK_SERVICES.some(s => s.id === newDetails.serviceId);
+    if (!isValidService) {
+      return { success: false, error: 'Invalid service selected. Please choose an existing service.' };
+    }
+  }
+
   // If slot has changed, verify availability of new slot
   if (newKey !== oldKey) {
     if (bookedSlots.has(newKey)) {
@@ -760,9 +854,96 @@ export function updateAppointment(appointmentId, newDetails) {
   const slots = getBarberTimeSlots(newBarberId);
   const slotObj = slots.find(s => s.timeId === newTimeId) || getBarberTimeSlots('any').find(s => s.timeId === newTimeId);
 
+  // ── Service Change & Payment Adjustment Calculation ────────────────
+  // 1. Preserve original baseline service & price across multiple edits
+  const originalServiceId = current.originalServiceId || current.serviceId || 'srv-1';
+  const originalServiceName = current.originalServiceName || current.serviceName || 'Service';
+  const originalPrice = current.originalPrice !== undefined ? Number(current.originalPrice) : (Number(current.price) || 0);
+
+  // 2. Resolve new service details
+  const newServiceId = newDetails.serviceId || current.serviceId || 'srv-1';
+  const matchedService = MOCK_SERVICES.find(s => s.id === newServiceId);
+  const newServiceName = matchedService?.name || newDetails.serviceName || current.serviceName || 'Service';
+  const newPrice = matchedService?.price !== undefined 
+    ? Number(matchedService.price) 
+    : (newDetails.price !== undefined ? Number(newDetails.price) : Number(current.price));
+
+  // 3. Determine verified money collected so far
+  const isOriginalVerified = current.paymentStatus === 'Verified' || (Number(current.verifiedOriginalAmount) > 0) || (Number(current.paidAmount) > 0);
+  const verifiedOriginal = isOriginalVerified 
+    ? (current.verifiedOriginalAmount !== undefined 
+        ? Number(current.verifiedOriginalAmount) 
+        : (current.paidAmount !== undefined ? Number(current.paidAmount) : (Number(current.amountPaid) || originalPrice)))
+    : 0;
+
+  const verifiedAdditional = Number(current.verifiedAdditionalAmount) || 0;
+  const totalVerifiedSoFar = verifiedOriginal + verifiedAdditional;
+
+  let paidAmount = totalVerifiedSoFar;
+  let remainingAmount = 0;
+  let adjustmentAmount = 0;
+  let adjustmentType = 'none';
+  let overpaymentAmount = 0;
+  let overpaymentRefundAtShop = 0;
+  let shopRefundNote = null;
+  let refundAmount = 0;
+  let refundFee = 0;
+  let refundMethod = null;
+  let refundAccount = null;
+  let refundStatus = 'None';
+  let paymentStatus = current.paymentStatus || 'Verification Pending';
+
+  // Compare newPrice against the baseline service price (or verified amount)
+  const baselinePrice = (isOriginalVerified && totalVerifiedSoFar > 0) ? totalVerifiedSoFar : originalPrice;
+  const diff = newPrice - baselinePrice;
+
+  if (diff > 0) {
+    // Upgraded to more expensive service:
+    // Customer must submit an additional payment receipt for ONLY the remaining amount
+    adjustmentType = 'additional_payment';
+    adjustmentAmount = diff;
+    remainingAmount = diff;
+    paidAmount = isOriginalVerified ? totalVerifiedSoFar : 0;
+    paymentStatus = current.additionalPaymentStatus === 'Pending Verification'
+      ? 'Additional Payment Pending Verification'
+      : (isOriginalVerified ? 'Additional Payment Due' : 'Verification Pending');
+    refundAmount = 0;
+    refundFee = 0;
+    refundStatus = 'None';
+  } else if (diff < 0) {
+    // Downgraded / changed to cheaper service:
+    // Policy: 75% refund is strictly for CANCELLATIONS, NOT service changes.
+    // 100% of the price difference is returned in cash at the shop when arriving for haircut!
+    const priceDiff = Math.abs(diff);
+    adjustmentType = 'downgrade_refund_at_shop';
+    adjustmentAmount = priceDiff;
+    overpaymentAmount = priceDiff;
+    overpaymentRefundAtShop = priceDiff;
+    remainingAmount = 0;
+    paidAmount = isOriginalVerified ? newPrice : 0;
+    paymentStatus = isOriginalVerified ? 'Verified' : 'Verification Pending';
+    refundAmount = 0;
+    refundFee = 0;
+    refundStatus = 'None';
+    refundMethod = null;
+    refundAccount = null;
+    shopRefundNote = `Customer will receive ${priceDiff} ETB cash change in person at the shop when they arrive for their haircut.`;
+  } else {
+    // Same price or reverted back to original service
+    adjustmentType = 'none';
+    adjustmentAmount = 0;
+    remainingAmount = 0;
+    paidAmount = isOriginalVerified ? newPrice : 0;
+    paymentStatus = isOriginalVerified ? 'Verified' : 'Verification Pending';
+    refundAmount = 0;
+    refundFee = 0;
+    refundStatus = 'None';
+  }
+
   const updatedAppointment = {
     ...current,
     ...newDetails,
+    isEdited: true, // Marked as an edited appointment
     barberId: newBarberId,
     barberName: barberObj?.name || current.barberName,
     dateStr: newDateStr,
@@ -778,6 +959,52 @@ export function updateAppointment(appointmentId, newDetails) {
     updatedAt: new Date().toISOString(),
     status: 'Confirmed',
     bookingStatus: 'Confirmed',
+    
+    // Canonical baseline service & current service
+    originalServiceId,
+    originalServiceName,
+    originalPrice,
+    currentServiceId: newServiceId,
+    currentServiceName: newServiceName,
+    currentPrice: newPrice,
+    serviceId: newServiceId,
+    serviceName: newServiceName,
+    price: newPrice,
+
+    // Decoupled receipts & amounts
+    originalReceiptPreview: current.originalReceiptPreview || current.receiptPreview || null,
+    originalReceiptFileName: current.originalReceiptFileName || current.receiptFileName || 'receipt.png',
+    receiptPreview: current.originalReceiptPreview || current.receiptPreview || null,
+    receiptFileName: current.originalReceiptFileName || current.receiptFileName || 'receipt.png',
+    additionalReceiptPreview: newDetails.additionalReceiptPreview !== undefined ? newDetails.additionalReceiptPreview : (current.additionalReceiptPreview || null),
+    additionalReceiptFileName: newDetails.additionalReceiptFileName !== undefined ? newDetails.additionalReceiptFileName : (current.additionalReceiptFileName || null),
+    additionalSubmittedAmount: newDetails.additionalSubmittedAmount !== undefined ? newDetails.additionalSubmittedAmount : (current.additionalSubmittedAmount || 0),
+    additionalPaymentStatus: newDetails.additionalPaymentStatus || current.additionalPaymentStatus || 'None',
+
+    verifiedOriginalAmount: verifiedOriginal,
+    verifiedAdditionalAmount: verifiedAdditional,
+    paidAmount,
+    amountPaid: paidAmount, // CRITICAL FIX: never newPrice! Always actual verified money
+    submittedAmount: current.submittedAmount || current.originalSubmittedAmount || current.originalPrice || originalPrice,
+    remainingAmount,
+    adjustmentAmount,
+    adjustmentType,
+    overpaymentAmount,
+    overpaymentRefundAtShop,
+    shopRefundNote,
+    shopRefundHandedOver: (diff < 0) ? Boolean(current.shopRefundHandedOver) : false,
+    shopRefundHandedOverAt: (diff < 0) ? (current.shopRefundHandedOverAt || null) : null,
+    shopRefundHandedOverBy: (diff < 0) ? (current.shopRefundHandedOverBy || null) : null,
+
+    // 75% Refund policy & destination details (strictly for cancellations)
+    refundMethod,
+    refundAccount,
+    refundAmount,
+    refundFee,
+    refundStatus,
+    refundRequestedAt: null,
+
+    paymentStatus,
   };
 
   saveActiveBooking(updatedAppointment);
@@ -788,16 +1015,48 @@ export function updateAppointment(appointmentId, newDetails) {
 }
 
 // ── Cancel Appointment (Releases slot and preserves historical record) ──
-export function cancelAppointment(appointmentId) {
+export function cancelAppointment(appointmentId, refundDetails = {}) {
   loadBookedSlotsFromStorage();
-  const current = getActiveBooking();
-  if (!current) return false;
+  let current = getActiveBooking();
+  if (!current || (appointmentId && current.id !== appointmentId && current.ref !== appointmentId)) {
+    for (const v of bookedSlots.values()) {
+      if (v.id === appointmentId || v.ref === appointmentId || v.bookingReference === appointmentId) {
+        current = v;
+        break;
+      }
+    }
+  }
+  if (!current) return { success: false, error: 'Appointment not found' };
+
+  const isOriginalVerified = current.paymentStatus === 'Verified' || (Number(current.verifiedOriginalAmount) > 0) || (Number(current.paidAmount) > 0);
+  const verifiedPaid = isOriginalVerified
+    ? (current.verifiedOriginalAmount !== undefined
+        ? Number(current.verifiedOriginalAmount)
+        : (current.paidAmount !== undefined ? Number(current.paidAmount) : (Number(current.amountPaid) || Number(current.price) || 0)))
+    : 0;
+
+  let refundAmount = 0;
+  let refundFee = 0;
+  let refundStatus = 'None';
+  const refundMethod = refundDetails.refundMethod || current.refundMethod || (verifiedPaid > 0 ? 'telebirr' : null);
+  const refundAccount = refundDetails.refundAccount || current.refundAccount || null;
+
+  if (verifiedPaid > 0) {
+    refundAmount = Math.round(verifiedPaid * 0.75 * 100) / 100;
+    refundFee = Math.round(verifiedPaid * 0.25 * 100) / 100;
+    refundStatus = 'Refund Requested';
+  }
 
   const cancelledAppointment = {
     ...current,
     status: 'Customer Cancelled',
     bookingStatus: 'Customer Cancelled',
-    refundStatus: 'Pending',
+    refundStatus,
+    refundAmount,
+    refundFee,
+    refundMethod,
+    refundAccount,
+    refundRequestedAt: verifiedPaid > 0 ? new Date().toISOString() : null,
     cancelledAt: new Date().toISOString(),
   };
 
@@ -819,11 +1078,15 @@ export function cancelAppointment(appointmentId) {
   saveBookedSlotsToStorage();
 
   saveActiveBooking(cancelledAppointment);
-  return cancelledAppointment;
+  return {
+    ...cancelledAppointment,
+    success: true,
+    appointment: cancelledAppointment
+  };
 }
 
 // ── Cancel a Booking Direct Helper ────────────────────────────────────
-export function cancelBooking(barberId, dateStr, timeId) {
+export function cancelBooking(barberId, dateStr, timeId, refundDetails = {}) {
   loadBookedSlotsFromStorage();
   const key = `${barberId}:${dateStr}:${timeId}`;
   let existing = bookedSlots.get(key);
@@ -836,11 +1099,35 @@ export function cancelBooking(barberId, dateStr, timeId) {
   }
 
   if (existing) {
+    const isOriginalVerified = existing.paymentStatus === 'Verified' || (Number(existing.verifiedOriginalAmount) > 0) || (Number(existing.paidAmount) > 0);
+    const verifiedPaid = isOriginalVerified
+      ? (existing.verifiedOriginalAmount !== undefined
+          ? Number(existing.verifiedOriginalAmount)
+          : (existing.paidAmount !== undefined ? Number(existing.paidAmount) : (Number(existing.amountPaid) || Number(existing.price) || 0)))
+      : 0;
+
+    let refundAmount = 0;
+    let refundFee = 0;
+    let refundStatus = 'None';
+    const refundMethod = refundDetails.refundMethod || existing.refundMethod || (verifiedPaid > 0 ? 'telebirr' : null);
+    const refundAccount = refundDetails.refundAccount || existing.refundAccount || null;
+
+    if (verifiedPaid > 0) {
+      refundAmount = Math.round(verifiedPaid * 0.75 * 100) / 100;
+      refundFee = Math.round(verifiedPaid * 0.25 * 100) / 100;
+      refundStatus = 'Refund Requested';
+    }
+
     const cancelledAppointment = {
       ...existing,
       status: 'Customer Cancelled',
       bookingStatus: 'Customer Cancelled',
-      refundStatus: 'Pending',
+      refundStatus,
+      refundAmount,
+      refundFee,
+      refundMethod,
+      refundAccount,
+      refundRequestedAt: verifiedPaid > 0 ? new Date().toISOString() : null,
       cancelledAt: new Date().toISOString(),
     };
     bookedSlots.delete(key);
@@ -854,6 +1141,554 @@ export function cancelBooking(barberId, dateStr, timeId) {
   return true;
 }
 
+// ── Submit Additional Payment Receipt ──────────────────────────────────
+export function submitAdditionalPaymentReceipt(appointmentId, { receiptPreview, receiptFileName, amount }) {
+  loadBookedSlotsFromStorage();
+  const current = getActiveBooking();
+  if (!current || (current.id !== appointmentId && current.ref !== appointmentId && current.bookingReference !== appointmentId)) {
+    return { success: false, error: 'Appointment not found.' };
+  }
+
+  const additionalAmount = Number(amount) || Number(current.remainingAmount) || 0;
+  const fileName = receiptFileName || 'additional_receipt.png';
+
+  if (receiptPreview) {
+    if (current.ref) setReceiptImage(`${current.ref}_additional`, receiptPreview);
+    if (current.id) setReceiptImage(`${current.id}_additional`, receiptPreview);
+    if (current.bookingReference) setReceiptImage(`${current.bookingReference}_additional`, receiptPreview);
+    try {
+      if (typeof localStorage !== 'undefined') {
+        if (current.ref) localStorage.setItem(`nhatty_active_additional_${current.ref}`, receiptPreview);
+        if (current.id) localStorage.setItem(`nhatty_active_additional_${current.id}`, receiptPreview);
+      }
+    } catch (e) {}
+  }
+
+  const updatedAppointment = {
+    ...current,
+    additionalReceiptPreview: receiptPreview,
+    additionalReceiptFileName: fileName,
+    additionalSubmittedAmount: additionalAmount,
+    additionalPaymentStatus: 'Pending Verification',
+    paymentStatus: 'Additional Payment Pending Verification',
+    updatedAt: new Date().toISOString()
+  };
+
+  saveActiveBooking(updatedAppointment);
+
+  // Update in bookedSlots
+  for (const [k, v] of bookedSlots.entries()) {
+    if (v.id === current.id || v.ref === current.ref || v.bookingReference === current.ref) {
+      bookedSlots.set(k, {
+        ...v,
+        ...updatedAppointment
+      });
+    }
+  }
+  saveBookedSlotsToStorage();
+
+  return { success: true, appointment: updatedAppointment };
+}
+
+// ── Verify Original Payment (Staff Dashboard) ─────────────────────────
+export function verifyOriginalPayment(refOrId) {
+  loadBookedSlotsFromStorage();
+  let matched = false;
+  let lastUpdated = null;
+  const searchStr = String(refOrId || '').trim().toLowerCase();
+
+  for (const [key, b] of bookedSlots.entries()) {
+    const slotKey = `${b.barberId}:${b.dateStr}:${b.timeId}`.toLowerCase();
+    const bRef = String(b.ref || b.bookingReference || '').trim().toLowerCase();
+    const bId = String(b.id || '').trim().toLowerCase();
+    const bKey = String(key).trim().toLowerCase();
+
+    if (bId === searchStr || bRef === searchStr || bKey === searchStr || slotKey === searchStr) {
+      const fullPrice = Number(b.price) || Number(b.currentPrice) || 0;
+      const originalPrice = b.originalPrice !== undefined ? Number(b.originalPrice) : fullPrice;
+      const isAdditionalVerified = b.additionalPaymentStatus === 'Verified';
+      const verifiedAdd = isAdditionalVerified ? (Number(b.verifiedAdditionalAmount) || (fullPrice - originalPrice)) : 0;
+      const newPaidAmount = originalPrice + verifiedAdd;
+      const remainingAmount = Math.max(0, fullPrice - newPaidAmount);
+
+      const isFullyPaid = !b.isEdited || (fullPrice <= originalPrice) || isAdditionalVerified;
+
+      const updated = {
+        ...b,
+        originalPaymentStatus: 'Verified',
+        verifiedOriginalAmount: originalPrice,
+        paidAmount: newPaidAmount,
+        amountPaid: newPaidAmount,
+        remainingAmount: b.isEdited ? remainingAmount : 0,
+        paymentStatus: isFullyPaid ? 'Verified' : (b.additionalPaymentStatus === 'Pending Verification' ? 'Additional Payment Pending Verification' : 'Additional Payment Due'),
+        verifiedAt: new Date().toISOString()
+      };
+      bookedSlots.set(key, updated);
+      lastUpdated = updated;
+      matched = true;
+    }
+  }
+
+  try {
+    const raw = localStorage.getItem(ACTIVE_BOOKING_KEY);
+    if (raw) {
+      const active = JSON.parse(raw);
+      if (active) {
+        const activeRef = String(active.ref || active.bookingReference || '').trim().toLowerCase();
+        const activeId = String(active.id || '').trim().toLowerCase();
+        const activeSlotKey = `${active.barberId}:${active.dateStr}:${active.timeId}`.toLowerCase();
+
+        if (activeRef === searchStr || activeId === searchStr || activeSlotKey === searchStr) {
+          const fullPrice = Number(active.price) || Number(active.currentPrice) || 0;
+          const originalPrice = active.originalPrice !== undefined ? Number(active.originalPrice) : fullPrice;
+          const isAdditionalVerified = active.additionalPaymentStatus === 'Verified';
+          const verifiedAdd = isAdditionalVerified ? (Number(active.verifiedAdditionalAmount) || (fullPrice - originalPrice)) : 0;
+          const newPaidAmount = originalPrice + verifiedAdd;
+          const remainingAmount = Math.max(0, fullPrice - newPaidAmount);
+
+          const isFullyPaid = !active.isEdited || (fullPrice <= originalPrice) || isAdditionalVerified;
+
+          const updatedActive = {
+            ...active,
+            originalPaymentStatus: 'Verified',
+            verifiedOriginalAmount: originalPrice,
+            paidAmount: newPaidAmount,
+            amountPaid: newPaidAmount,
+            remainingAmount: active.isEdited ? remainingAmount : 0,
+            paymentStatus: isFullyPaid ? 'Verified' : (active.additionalPaymentStatus === 'Pending Verification' ? 'Additional Payment Pending Verification' : 'Additional Payment Due'),
+            verifiedAt: new Date().toISOString()
+          };
+          saveActiveBooking(updatedActive);
+          lastUpdated = updatedActive;
+        }
+      }
+    }
+  } catch (e) {}
+
+  saveBookedSlotsToStorage();
+  return { success: matched, appointment: lastUpdated };
+}
+
+// ── Revert Original Payment to Pending (Staff Dashboard) ───────────────
+export function revertOriginalPayment(refOrId) {
+  loadBookedSlotsFromStorage();
+  let matched = false;
+  let lastUpdated = null;
+  const searchStr = String(refOrId || '').trim().toLowerCase();
+
+  for (const [key, b] of bookedSlots.entries()) {
+    const slotKey = `${b.barberId}:${b.dateStr}:${b.timeId}`.toLowerCase();
+    const bRef = String(b.ref || b.bookingReference || '').trim().toLowerCase();
+    const bId = String(b.id || '').trim().toLowerCase();
+    const bKey = String(key).trim().toLowerCase();
+
+    if (bId === searchStr || bRef === searchStr || bKey === searchStr || slotKey === searchStr) {
+      const isAdditionalVerified = b.additionalPaymentStatus === 'Verified';
+      const verifiedAdd = isAdditionalVerified ? (Number(b.verifiedAdditionalAmount) || 0) : 0;
+      const fullPrice = Number(b.price) || 0;
+      const remainingAmount = b.isEdited ? Math.max(0, fullPrice - verifiedAdd) : 0;
+
+      const updated = {
+        ...b,
+        originalPaymentStatus: 'Pending Verification',
+        verifiedOriginalAmount: 0,
+        paidAmount: verifiedAdd,
+        amountPaid: verifiedAdd,
+        remainingAmount,
+        paymentStatus: 'Verification Pending'
+      };
+      bookedSlots.set(key, updated);
+      lastUpdated = updated;
+      matched = true;
+    }
+  }
+
+  try {
+    const raw = localStorage.getItem(ACTIVE_BOOKING_KEY);
+    if (raw) {
+      const active = JSON.parse(raw);
+      if (active) {
+        const activeRef = String(active.ref || active.bookingReference || '').trim().toLowerCase();
+        const activeId = String(active.id || '').trim().toLowerCase();
+        const activeSlotKey = `${active.barberId}:${active.dateStr}:${active.timeId}`.toLowerCase();
+
+        if (activeRef === searchStr || activeId === searchStr || activeSlotKey === searchStr) {
+          const isAdditionalVerified = active.additionalPaymentStatus === 'Verified';
+          const verifiedAdd = isAdditionalVerified ? (Number(active.verifiedAdditionalAmount) || 0) : 0;
+          const fullPrice = Number(active.price) || 0;
+          const remainingAmount = active.isEdited ? Math.max(0, fullPrice - verifiedAdd) : 0;
+
+          const updatedActive = {
+            ...active,
+            originalPaymentStatus: 'Pending Verification',
+            verifiedOriginalAmount: 0,
+            paidAmount: verifiedAdd,
+            amountPaid: verifiedAdd,
+            remainingAmount,
+            paymentStatus: 'Verification Pending'
+          };
+          saveActiveBooking(updatedActive);
+          lastUpdated = updatedActive;
+        }
+      }
+    }
+  } catch (e) {}
+
+  saveBookedSlotsToStorage();
+  return { success: matched, appointment: lastUpdated };
+}
+
+// ── Verify Additional Payment (Staff Dashboard) ───────────────────────
+export function verifyAdditionalPayment(refOrId) {
+  loadBookedSlotsFromStorage();
+  let matched = false;
+  let lastUpdatedVerify = null;
+  const searchStr = String(refOrId || '').trim().toLowerCase();
+
+  for (const [key, b] of bookedSlots.entries()) {
+    const slotKey = `${b.barberId}:${b.dateStr}:${b.timeId}`.toLowerCase();
+    const bRef = String(b.ref || b.bookingReference || '').trim().toLowerCase();
+    const bId = String(b.id || '').trim().toLowerCase();
+    const bKey = String(key).trim().toLowerCase();
+
+    if (bId === searchStr || bRef === searchStr || bKey === searchStr || slotKey === searchStr) {
+      const fullPrice = Number(b.price) || Number(b.currentPrice) || 0;
+      const originalPrice = b.originalPrice !== undefined ? Number(b.originalPrice) : fullPrice;
+      const addSubmitted = Number(b.additionalSubmittedAmount) || Number(b.adjustmentAmount) || (fullPrice - originalPrice);
+      const isOriginalVerified = b.originalPaymentStatus === 'Verified' || b.paymentStatus === 'Verified' || Number(b.verifiedOriginalAmount) > 0;
+      const verifiedOrig = isOriginalVerified ? originalPrice : 0;
+      const newPaidAmount = verifiedOrig + addSubmitted;
+      const remainingAmount = Math.max(0, fullPrice - newPaidAmount);
+
+      const updated = {
+        ...b,
+        verifiedAdditionalAmount: addSubmitted,
+        additionalPaymentStatus: 'Verified',
+        paidAmount: newPaidAmount,
+        amountPaid: newPaidAmount,
+        remainingAmount: b.isEdited ? remainingAmount : 0,
+        paymentStatus: isOriginalVerified ? 'Verified' : 'Verification Pending',
+        verifiedAt: new Date().toISOString()
+      };
+      bookedSlots.set(key, updated);
+      lastUpdatedVerify = updated;
+      matched = true;
+    }
+  }
+
+  try {
+    const raw = localStorage.getItem(ACTIVE_BOOKING_KEY);
+    if (raw) {
+      const active = JSON.parse(raw);
+      if (active) {
+        const activeRef = String(active.ref || active.bookingReference || '').trim().toLowerCase();
+        const activeId = String(active.id || '').trim().toLowerCase();
+        const activeSlotKey = `${active.barberId}:${active.dateStr}:${active.timeId}`.toLowerCase();
+
+        if (activeRef === searchStr || activeId === searchStr || activeSlotKey === searchStr) {
+          const fullPrice = Number(active.price) || Number(active.currentPrice) || 0;
+          const originalPrice = active.originalPrice !== undefined ? Number(active.originalPrice) : fullPrice;
+          const addSubmitted = Number(active.additionalSubmittedAmount) || Number(active.adjustmentAmount) || (fullPrice - originalPrice);
+          const isOriginalVerified = active.originalPaymentStatus === 'Verified' || active.paymentStatus === 'Verified' || Number(active.verifiedOriginalAmount) > 0;
+          const verifiedOrig = isOriginalVerified ? originalPrice : 0;
+          const newPaidAmount = verifiedOrig + addSubmitted;
+          const remainingAmount = Math.max(0, fullPrice - newPaidAmount);
+
+          const updatedActive = {
+            ...active,
+            verifiedAdditionalAmount: addSubmitted,
+            additionalPaymentStatus: 'Verified',
+            paidAmount: newPaidAmount,
+            amountPaid: newPaidAmount,
+            remainingAmount: active.isEdited ? remainingAmount : 0,
+            paymentStatus: isOriginalVerified ? 'Verified' : 'Verification Pending',
+            verifiedAt: new Date().toISOString()
+          };
+          saveActiveBooking(updatedActive);
+          lastUpdatedVerify = updatedActive;
+        }
+      }
+    }
+  } catch (e) {}
+
+  saveBookedSlotsToStorage();
+  return { success: matched, appointment: lastUpdatedVerify };
+}
+
+// ── Revert Additional Payment to Pending (Staff Dashboard) ─────────────
+export function revertAdditionalPayment(refOrId) {
+  loadBookedSlotsFromStorage();
+  let matched = false;
+  let lastUpdated = null;
+  const searchStr = String(refOrId || '').trim().toLowerCase();
+
+  for (const [key, b] of bookedSlots.entries()) {
+    const slotKey = `${b.barberId}:${b.dateStr}:${b.timeId}`.toLowerCase();
+    const bRef = String(b.ref || b.bookingReference || '').trim().toLowerCase();
+    const bId = String(b.id || '').trim().toLowerCase();
+    const bKey = String(key).trim().toLowerCase();
+
+    if (bId === searchStr || bRef === searchStr || bKey === searchStr || slotKey === searchStr) {
+      const isOrigVerified = b.originalPaymentStatus === 'Verified' || (Number(b.verifiedOriginalAmount) > 0);
+      const fullPrice = Number(b.price) || 0;
+      const originalPrice = b.originalPrice !== undefined ? Number(b.originalPrice) : fullPrice;
+      const verifiedOrig = isOrigVerified ? originalPrice : 0;
+      const addDiff = Math.max(0, fullPrice - originalPrice);
+
+      const updated = {
+        ...b,
+        additionalPaymentStatus: b.additionalSubmittedAmount > 0 ? 'Pending Verification' : 'None',
+        verifiedAdditionalAmount: 0,
+        paidAmount: verifiedOrig,
+        amountPaid: verifiedOrig,
+        remainingAmount: addDiff,
+        paymentStatus: isOrigVerified ? (b.additionalSubmittedAmount > 0 ? 'Additional Payment Pending Verification' : 'Additional Payment Due') : 'Verification Pending',
+      };
+      bookedSlots.set(key, updated);
+      lastUpdated = updated;
+      matched = true;
+    }
+  }
+
+  try {
+    const raw = localStorage.getItem(ACTIVE_BOOKING_KEY);
+    if (raw) {
+      const active = JSON.parse(raw);
+      if (active) {
+        const activeRef = String(active.ref || active.bookingReference || '').trim().toLowerCase();
+        const activeId = String(active.id || '').trim().toLowerCase();
+        const activeSlotKey = `${active.barberId}:${active.dateStr}:${active.timeId}`.toLowerCase();
+
+        if (activeRef === searchStr || activeId === searchStr || activeSlotKey === searchStr) {
+          const isOrigVerified = active.originalPaymentStatus === 'Verified' || (Number(active.verifiedOriginalAmount) > 0);
+          const fullPrice = Number(active.price) || 0;
+          const originalPrice = active.originalPrice !== undefined ? Number(active.originalPrice) : fullPrice;
+          const verifiedOrig = isOrigVerified ? originalPrice : 0;
+          const addDiff = Math.max(0, fullPrice - originalPrice);
+
+          const updatedActive = {
+            ...active,
+            additionalPaymentStatus: active.additionalSubmittedAmount > 0 ? 'Pending Verification' : 'None',
+            verifiedAdditionalAmount: 0,
+            paidAmount: verifiedOrig,
+            amountPaid: verifiedOrig,
+            remainingAmount: addDiff,
+            paymentStatus: isOrigVerified ? (active.additionalSubmittedAmount > 0 ? 'Additional Payment Pending Verification' : 'Additional Payment Due') : 'Verification Pending',
+          };
+          saveActiveBooking(updatedActive);
+          lastUpdated = updatedActive;
+        }
+      }
+    }
+  } catch (e) {}
+
+  saveBookedSlotsToStorage();
+  return { success: matched, appointment: lastUpdated };
+}
+
+// ── Verify Both Receipts (Staff Dashboard) ────────────────────────────
+export function verifyAllPayments(refOrId) {
+  loadBookedSlotsFromStorage();
+  let matched = false;
+  let lastUpdated = null;
+  const searchStr = String(refOrId || '').trim().toLowerCase();
+
+  for (const [key, b] of bookedSlots.entries()) {
+    const slotKey = `${b.barberId}:${b.dateStr}:${b.timeId}`.toLowerCase();
+    const bRef = String(b.ref || b.bookingReference || '').trim().toLowerCase();
+    const bId = String(b.id || '').trim().toLowerCase();
+    const bKey = String(key).trim().toLowerCase();
+
+    if (bId === searchStr || bRef === searchStr || bKey === searchStr || slotKey === searchStr) {
+      const fullPrice = Number(b.price) || Number(b.currentPrice) || 0;
+      const originalPrice = b.originalPrice !== undefined ? Number(b.originalPrice) : fullPrice;
+      const addDiff = Math.max(0, fullPrice - originalPrice);
+
+      const updated = {
+        ...b,
+        originalPaymentStatus: 'Verified',
+        additionalPaymentStatus: (b.isEdited && addDiff > 0) ? 'Verified' : (b.additionalPaymentStatus || 'None'),
+        verifiedOriginalAmount: originalPrice,
+        verifiedAdditionalAmount: addDiff,
+        paidAmount: fullPrice,
+        amountPaid: fullPrice,
+        remainingAmount: 0,
+        paymentStatus: 'Verified',
+        verifiedAt: new Date().toISOString()
+      };
+      bookedSlots.set(key, updated);
+      lastUpdated = updated;
+      matched = true;
+    }
+  }
+
+  try {
+    const raw = localStorage.getItem(ACTIVE_BOOKING_KEY);
+    if (raw) {
+      const active = JSON.parse(raw);
+      if (active) {
+        const activeRef = String(active.ref || active.bookingReference || '').trim().toLowerCase();
+        const activeId = String(active.id || '').trim().toLowerCase();
+        const activeSlotKey = `${active.barberId}:${active.dateStr}:${active.timeId}`.toLowerCase();
+
+        if (activeRef === searchStr || activeId === searchStr || activeSlotKey === searchStr) {
+          const fullPrice = Number(active.price) || Number(active.currentPrice) || 0;
+          const originalPrice = active.originalPrice !== undefined ? Number(active.originalPrice) : fullPrice;
+          const addDiff = Math.max(0, fullPrice - originalPrice);
+
+          const updatedActive = {
+            ...active,
+            originalPaymentStatus: 'Verified',
+            additionalPaymentStatus: (active.isEdited && addDiff > 0) ? 'Verified' : (active.additionalPaymentStatus || 'None'),
+            verifiedOriginalAmount: originalPrice,
+            verifiedAdditionalAmount: addDiff,
+            paidAmount: fullPrice,
+            amountPaid: fullPrice,
+            remainingAmount: 0,
+            paymentStatus: 'Verified',
+            verifiedAt: new Date().toISOString()
+          };
+          saveActiveBooking(updatedActive);
+          lastUpdated = updatedActive;
+        }
+      }
+    }
+  } catch (e) {}
+
+  saveBookedSlotsToStorage();
+  return { success: matched, appointment: lastUpdated };
+}
+
+// ── Update Refund Status (Staff Dashboard) ────────────────────────────
+export function updateRefundStatus(refOrId, newRefundStatus) {
+  loadBookedSlotsFromStorage();
+  let matched = false;
+  let lastUpdatedRefund = null;
+  const searchStr = String(refOrId || '').trim().toLowerCase();
+
+  for (const [key, b] of bookedSlots.entries()) {
+    const slotKey = `${b.barberId}:${b.dateStr}:${b.timeId}`.toLowerCase();
+    const bRef = String(b.ref || b.bookingReference || '').trim().toLowerCase();
+    const bId = String(b.id || '').trim().toLowerCase();
+
+    if (bId === searchStr || bRef === searchStr || slotKey === searchStr) {
+      const isCompleted = newRefundStatus === 'Refund Completed' || newRefundStatus === 'Completed';
+      const updated = {
+        ...b,
+        refundStatus: isCompleted ? 'Refund Completed' : newRefundStatus,
+        status: (b.status === 'Customer Cancelled' || b.status === 'Cancelled' || isCompleted)
+          ? (isCompleted ? 'Cancelled — Refund Completed' : b.status)
+          : b.status,
+        bookingStatus: (b.bookingStatus === 'Customer Cancelled' || b.bookingStatus === 'Cancelled' || isCompleted)
+          ? (isCompleted ? 'Cancelled — Refund Completed' : b.bookingStatus)
+          : b.bookingStatus,
+        refundCompletedAt: isCompleted ? new Date().toISOString() : b.refundCompletedAt,
+        updatedAt: new Date().toISOString()
+      };
+      bookedSlots.set(key, updated);
+      lastUpdatedRefund = updated;
+      matched = true;
+    }
+  }
+
+  // Also update active booking if matched
+  try {
+    const raw = localStorage.getItem(ACTIVE_BOOKING_KEY);
+    if (raw) {
+      const active = JSON.parse(raw);
+      if (active) {
+        const activeRef = String(active.ref || active.bookingReference || '').trim().toLowerCase();
+        const activeId = String(active.id || '').trim().toLowerCase();
+        const activeSlotKey = `${active.barberId}:${active.dateStr}:${active.timeId}`.toLowerCase();
+
+        if (activeRef === searchStr || activeId === searchStr || activeSlotKey === searchStr) {
+          const isCompleted = newRefundStatus === 'Refund Completed' || newRefundStatus === 'Completed';
+          const updatedActive = {
+            ...active,
+            refundStatus: isCompleted ? 'Refund Completed' : newRefundStatus,
+            status: (active.status === 'Customer Cancelled' || active.status === 'Cancelled' || isCompleted)
+              ? (isCompleted ? 'Cancelled — Refund Completed' : active.status)
+              : active.status,
+            bookingStatus: (active.bookingStatus === 'Customer Cancelled' || active.bookingStatus === 'Cancelled' || isCompleted)
+              ? (isCompleted ? 'Cancelled — Refund Completed' : active.bookingStatus)
+              : active.bookingStatus,
+            refundCompletedAt: isCompleted ? new Date().toISOString() : active.refundCompletedAt,
+            updatedAt: new Date().toISOString()
+          };
+          saveActiveBooking(updatedActive);
+          lastUpdatedRefund = updatedActive;
+        }
+      }
+    }
+  } catch (e) {}
+
+  saveBookedSlotsToStorage();
+  return { success: matched, appointment: lastUpdatedRefund };
+}
+
+// ── Toggle / Update Shop Refund (Cash Change) Handover Status (Staff Dashboard) ──
+export function toggleShopRefundStatus(refOrId, handedOver = null, staffName = 'Staff') {
+  loadBookedSlotsFromStorage();
+  let matched = false;
+  let lastUpdated = null;
+  const searchStr = String(refOrId || '').trim().toLowerCase();
+
+  for (const [key, b] of bookedSlots.entries()) {
+    const slotKey = `${b.barberId}:${b.dateStr}:${b.timeId}`.toLowerCase();
+    const bRef = String(b.ref || b.bookingReference || '').trim().toLowerCase();
+    const bId = String(b.id || '').trim().toLowerCase();
+
+    if (bId === searchStr || bRef === searchStr || slotKey === searchStr) {
+      const isCurrentlyHandedOver = Boolean(b.shopRefundHandedOver);
+      const nextHandedOver = handedOver !== null ? Boolean(handedOver) : !isCurrentlyHandedOver;
+
+      const updated = {
+        ...b,
+        shopRefundHandedOver: nextHandedOver,
+        shopRefundHandedOverAt: nextHandedOver ? new Date().toISOString() : null,
+        shopRefundHandedOverBy: nextHandedOver ? staffName : null,
+        updatedAt: new Date().toISOString()
+      };
+      bookedSlots.set(key, updated);
+      lastUpdated = updated;
+      matched = true;
+    }
+  }
+
+  // Also update active booking if matched
+  try {
+    const raw = localStorage.getItem(ACTIVE_BOOKING_KEY);
+    if (raw) {
+      const active = JSON.parse(raw);
+      if (active) {
+        const activeRef = String(active.ref || active.bookingReference || '').trim().toLowerCase();
+        const activeId = String(active.id || '').trim().toLowerCase();
+        const activeSlotKey = `${active.barberId}:${active.dateStr}:${active.timeId}`.toLowerCase();
+
+        if (activeRef === searchStr || activeId === searchStr || activeSlotKey === searchStr) {
+          const isCurrentlyHandedOver = Boolean(active.shopRefundHandedOver);
+          const nextHandedOver = handedOver !== null ? Boolean(handedOver) : !isCurrentlyHandedOver;
+
+          const updatedActive = {
+            ...active,
+            shopRefundHandedOver: nextHandedOver,
+            shopRefundHandedOverAt: nextHandedOver ? new Date().toISOString() : null,
+            shopRefundHandedOverBy: nextHandedOver ? staffName : null,
+            updatedAt: new Date().toISOString()
+          };
+          saveActiveBooking(updatedActive);
+          lastUpdated = updatedActive;
+          matched = true;
+        }
+      }
+    }
+  } catch (e) {}
+
+  saveBookedSlotsToStorage();
+  notifyBookingStoreChange();
+  return { success: matched, appointment: lastUpdated };
+}
+
 // ── Active Booking / My Appointment Persistence ────────────────────────
 export function getActiveBooking() {
   try {
@@ -865,17 +1700,23 @@ export function getActiveBooking() {
         loadBookedSlotsFromStorage();
         for (const b of bookedSlots.values()) {
           if (b.id === parsed.id || b.ref === parsed.ref || b.bookingReference === parsed.ref) {
-            const cachedImg = getReceiptImage(b.ref || b.id);
+            const cachedImg = getReceiptImage(b.ref || b.id || b.bookingReference);
+            const cachedAddImg = getReceiptImage(`${b.ref || b.id || b.bookingReference}_additional`);
             return normalizeAppointment({
               ...b,
-              receiptPreview: cachedImg || b.receiptPreview || null
+              receiptPreview: cachedImg || b.receiptPreview || null,
+              originalReceiptPreview: cachedImg || b.originalReceiptPreview || null,
+              additionalReceiptPreview: cachedAddImg || b.additionalReceiptPreview || null
             });
           }
         }
         const cachedImg = getReceiptImage(parsed.ref || parsed.id);
+        const cachedAddImg = getReceiptImage(`${parsed.ref || parsed.id}_additional`);
         return normalizeAppointment({
           ...parsed,
-          receiptPreview: cachedImg || parsed.receiptPreview || null
+          receiptPreview: cachedImg || parsed.receiptPreview || null,
+          originalReceiptPreview: cachedImg || parsed.originalReceiptPreview || null,
+          additionalReceiptPreview: cachedAddImg || parsed.additionalReceiptPreview || null
         });
       }
     }
@@ -890,10 +1731,13 @@ export function getActiveBooking() {
     
     if (confirmedBookings.length > 0) {
       const b = confirmedBookings[0];
-      const cachedImg = getReceiptImage(b.ref || b.id);
+      const cachedImg = getReceiptImage(b.ref || b.id || b.bookingReference);
+      const cachedAddImg = getReceiptImage(`${b.ref || b.id || b.bookingReference}_additional`);
       return normalizeAppointment({
         ...b,
-        receiptPreview: cachedImg || b.receiptPreview || null
+        receiptPreview: cachedImg || b.receiptPreview || null,
+        originalReceiptPreview: cachedImg || b.originalReceiptPreview || null,
+        additionalReceiptPreview: cachedAddImg || b.additionalReceiptPreview || null
       });
     }
   } catch (err) {}
@@ -907,14 +1751,24 @@ export function saveActiveBooking(booking) {
     return;
   }
 
-  if (booking.receiptPreview) {
-    setReceiptImage(booking.ref || booking.id, booking.receiptPreview);
+  const orig = booking.originalReceiptPreview || booking.receiptPreview;
+  if (orig) {
+    if (booking.ref) setReceiptImage(booking.ref, orig);
+    if (booking.id) setReceiptImage(booking.id, orig);
+    if (booking.bookingReference) setReceiptImage(booking.bookingReference, orig);
+  }
+  if (booking.additionalReceiptPreview) {
+    if (booking.ref) setReceiptImage(`${booking.ref}_additional`, booking.additionalReceiptPreview);
+    if (booking.id) setReceiptImage(`${booking.id}_additional`, booking.additionalReceiptPreview);
+    if (booking.bookingReference) setReceiptImage(`${booking.bookingReference}_additional`, booking.additionalReceiptPreview);
   }
 
   try {
     const cleanBooking = {
       ...booking,
-      receiptPreview: null // keep localStorage entry ultra-light (< 1KB)
+      receiptPreview: null, // keep localStorage entry ultra-light (< 1KB)
+      originalReceiptPreview: null,
+      additionalReceiptPreview: null
     };
     if (typeof localStorage !== 'undefined') {
       localStorage.setItem(ACTIVE_BOOKING_KEY, JSON.stringify(cleanBooking));
@@ -948,10 +1802,58 @@ export function clearActiveBooking() {
 export function normalizeAppointment(appt) {
   if (!appt) return null;
   const dynRelativeDate = formatAppointmentRelativeDate(appt.dateStr);
+  const currentPrice = Number(appt.price) || Number(appt.amountPaid) || 0;
+  const originalPrice = appt.originalPrice !== undefined ? Number(appt.originalPrice) : currentPrice;
+  const isEdited = Boolean(
+    appt.isEdited === true || 
+    (appt.originalServiceId && appt.serviceId && appt.originalServiceId !== appt.serviceId) ||
+    (appt.originalPrice !== undefined && Number(appt.originalPrice) !== currentPrice)
+  );
+
+  const isVerified = appt.paymentStatus === 'Verified';
+  const paidAmount = appt.paidAmount !== undefined 
+    ? Number(appt.paidAmount) 
+    : (isVerified ? currentPrice : 0);
+
+  // CRITICAL: Brand new bookings NEVER have remainingAmount > 0 (customer submitted full payment at checkout)
+  // Only genuine upgrades with additional_payment have positive remainingAmount
+  let remainingAmount = 0;
+  if (isEdited && appt.adjustmentType === 'additional_payment') {
+    if (appt.remainingAmount !== undefined) {
+      remainingAmount = Number(appt.remainingAmount);
+    } else {
+      remainingAmount = Math.max(0, currentPrice - paidAmount);
+    }
+  }
+
   return {
     ...appt,
+    isEdited,
     dateDisplay: dynRelativeDate || appt.dateStr,
-    relativeDate: dynRelativeDate || appt.dateStr
+    relativeDate: dynRelativeDate || appt.dateStr,
+    originalServiceId: appt.originalServiceId || appt.serviceId || 'srv-1',
+    originalServiceName: appt.originalServiceName || appt.serviceName || 'Service',
+    originalPrice,
+    currentServiceId: appt.currentServiceId || appt.serviceId,
+    currentServiceName: appt.currentServiceName || appt.serviceName,
+    currentPrice: currentPrice,
+    price: currentPrice,
+    paidAmount,
+    amountPaid: paidAmount,
+    remainingAmount,
+    adjustmentAmount: appt.adjustmentAmount !== undefined ? Number(appt.adjustmentAmount) : 0,
+    adjustmentType: isEdited ? (appt.adjustmentType || 'none') : 'none',
+    originalPaymentStatus: appt.originalPaymentStatus || (isVerified ? 'Verified' : 'Pending Verification'),
+    additionalPaymentStatus: isEdited ? (appt.additionalPaymentStatus || 'None') : 'None',
+    additionalSubmittedAmount: Number(appt.additionalSubmittedAmount) || 0,
+    refundMethod: appt.refundMethod || null,
+    refundAccount: appt.refundAccount || null,
+    refundAmount: Number(appt.refundAmount) || 0,
+    refundFee: Number(appt.refundFee) || 0,
+    refundStatus: appt.refundStatus || 'None',
+    shopRefundHandedOver: Boolean(appt.shopRefundHandedOver),
+    shopRefundHandedOverAt: appt.shopRefundHandedOverAt || null,
+    shopRefundHandedOverBy: appt.shopRefundHandedOverBy || null
   };
 }
 
@@ -959,9 +1861,17 @@ export function getAllAppointments() {
   loadBookedSlotsFromStorage();
   const mapList = Array.from(bookedSlots.values()).map(b => {
     const cachedImg = getReceiptImage(b.ref || b.id || b.bookingReference);
+    const cachedAddImg = 
+      getReceiptImage(`${b.ref}_additional`) || 
+      getReceiptImage(`${b.id}_additional`) || 
+      getReceiptImage(`${b.bookingReference}_additional`) ||
+      (typeof localStorage !== 'undefined' ? (localStorage.getItem(`nhatty_active_additional_${b.ref}`) || localStorage.getItem(`nhatty_active_additional_${b.id}`)) : null);
+
     return {
       ...b,
-      receiptPreview: cachedImg || b.receiptPreview || null
+      receiptPreview: cachedImg || b.receiptPreview || null,
+      originalReceiptPreview: cachedImg || b.originalReceiptPreview || null,
+      additionalReceiptPreview: cachedAddImg || b.additionalReceiptPreview || null
     };
   });
   const active = getActiveBooking();
@@ -1000,56 +1910,11 @@ export function getAppointmentsByDate(dateStr) {
  * Staff verification of customer payment receipt
  */
 export function updateStaffPaymentStatus(refOrId, newPaymentStatus) {
-  loadBookedSlotsFromStorage();
-  let matched = false;
-  const searchStr = String(refOrId || '').trim().toLowerCase();
-
-  for (const [key, b] of bookedSlots.entries()) {
-    const slotKey = `${b.barberId}:${b.dateStr}:${b.timeId}`.toLowerCase();
-    const bRef = String(b.ref || b.bookingReference || '').trim().toLowerCase();
-    const bId = String(b.id || '').trim().toLowerCase();
-    const bKey = String(key).trim().toLowerCase();
-
-    if (
-      bId === searchStr || 
-      bRef === searchStr || 
-      bKey === searchStr || 
-      slotKey === searchStr
-    ) {
-      const updated = {
-        ...b,
-        paymentStatus: newPaymentStatus,
-        verifiedAt: new Date().toISOString()
-      };
-      bookedSlots.set(key, updated);
-      matched = true;
-    }
+  if (newPaymentStatus === 'Verified') {
+    return verifyAllPayments(refOrId);
+  } else {
+    return revertOriginalPayment(refOrId);
   }
-
-  // Also update active booking in storage if it matches
-  try {
-    const raw = localStorage.getItem(ACTIVE_BOOKING_KEY);
-    if (raw) {
-      const active = JSON.parse(raw);
-      if (active) {
-        const activeRef = String(active.ref || active.bookingReference || '').trim().toLowerCase();
-        const activeId = String(active.id || '').trim().toLowerCase();
-        const activeSlotKey = `${active.barberId}:${active.dateStr}:${active.timeId}`.toLowerCase();
-
-        if (activeRef === searchStr || activeId === searchStr || activeSlotKey === searchStr) {
-          const updatedActive = {
-            ...active,
-            paymentStatus: newPaymentStatus,
-            verifiedAt: new Date().toISOString()
-          };
-          localStorage.setItem(ACTIVE_BOOKING_KEY, JSON.stringify(updatedActive));
-        }
-      }
-    }
-  } catch (e) {}
-
-  saveBookedSlotsToStorage();
-  return { success: matched };
 }
 
 /**

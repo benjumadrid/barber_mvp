@@ -43,8 +43,8 @@ export const MOCK_SERVICES = [
   { id: 'srv-2', name: 'Hair Cut + Face Treatment', price: 500, duration: '45 min', category: 'combo' },
   { id: 'srv-3', name: 'Beard Sculpting & Trim', price: 300, duration: '25 min', category: 'beard' },
   { id: 'srv-4', name: 'Nhatty VIP Royal Grooming', price: 800, duration: '60 min', category: 'vip' },
-  { id: 'srv-5', name: 'Kids Haircut (Under 12)', price: 300, duration: '25 min', category: 'kids' },
-  { id: 'srv-6', name: 'Hot Towel Royal Shave', price: 450, duration: '35 min', category: 'shave' }
+  { id: 'srv-5', name: 'Kids Haircut (Under 12)', price: 350, duration: '25 min', category: 'kids' },
+  { id: 'srv-6', name: 'Hot Towel Royal Shave', price: 350, duration: '30 min', category: 'shave' }
 ];
 
 // ── 1. IN-MEMORY CONVERSATIONAL CONTEXT ─────────────────────────────────
@@ -139,15 +139,48 @@ export function setInMemoryStaffAppointments(appts) {
   inMemoryAppointmentsStore = appts;
 }
 
-export function getAuthoritativeAppointments() {
-  if (inMemoryAppointmentsStore && Array.isArray(inMemoryAppointmentsStore)) {
-    return inMemoryAppointmentsStore;
+export function getAuthoritativeAppointments(explicitList = null) {
+  const mergedMap = new Map();
+
+  const addItems = (list) => {
+    if (!list || !Array.isArray(list)) return;
+    list.forEach(item => {
+      if (!item) return;
+      const key = item.ref || item.id || (item.barberId && item.dateStr && item.timeId ? `${item.barberId}:${item.dateStr}:${item.timeId}` : null);
+      if (key) {
+        if (!mergedMap.has(key)) {
+          mergedMap.set(key, item);
+        } else {
+          // Merge newer fields if available
+          mergedMap.set(key, { ...mergedMap.get(key), ...item });
+        }
+      } else {
+        mergedMap.set(`temp_${Math.random()}`, item);
+      }
+    });
+  };
+
+  // 1. Explicit list passed to AI engine
+  if (explicitList && Array.isArray(explicitList) && explicitList.length > 0) {
+    addItems(explicitList);
   }
+
+  // 2. In-memory store updated by BarberDashboardPage
+  if (inMemoryAppointmentsStore && Array.isArray(inMemoryAppointmentsStore) && inMemoryAppointmentsStore.length > 0) {
+    addItems(inMemoryAppointmentsStore);
+  }
+
+  // 3. Direct bookingStore getter
   try {
-    return getAllAppointments();
+    const storeList = getAllAppointments();
+    if (storeList && Array.isArray(storeList)) {
+      addItems(storeList);
+    }
   } catch (e) {
-    return [];
+    // ignore
   }
+
+  return Array.from(mergedMap.values());
 }
 
 // ── 4. ADVANCED NORMALIZATION & TYPO TOLERANCE ENGINE ──────────────────
@@ -341,21 +374,22 @@ const GENERIC_INTENT_STOPWORDS = new Set([
   'apointment', 'apointments', 'appointmnt', 'appointmnts', 'appoinment', 'appoinments',
   'booking', 'bookings', 'book', 'booked', 'bok', 'boking', 'bokings',
   'schedule', 'schedules', 'schedual', 'scheduel', 'queue', 'list',
-  'revenue', 'sales', 'earnings', 'income', 'money', 'payment', 'payments', 'paid', 'price',
+  'revenue', 'sales', 'earnings', 'income', 'money', 'payment', 'payments', 'paid', 'pay', 'pays', 'paying', 'price', 'pricing',
   'barber', 'barbers', 'chair', 'chairs',
   'service', 'services', 'cut', 'cuts', 'haircut', 'haircuts',
-  'receipt', 'receipts', 'verified', 'pending', 'unverified',
+  'receipt', 'receipts', 'verified', 'verifying', 'verification', 'pending', 'unverified',
   'completed', 'complete', 'finished', 'finish',
   'cancelled', 'canceld', 'cancld', 'cancelling', 'cancel',
   'refund', 'refunds', 'refunded',
   'currently', 'now', 'here', 'being', 'getting', 'serving', 'served', 'waiting',
   'details', 'everything', 'all', 'tell', 'dossier', 'summary', 'record', 'records', 'info', 'information',
   'customer', 'customers', 'client', 'clients', 'guest', 'guests',
-  'who', 'what', 'when', 'how', 'many', 'much', 'is', 'are', 'do', 'does', 'we', 'have',
+  'who', 'what', 'when', 'how', 'many', 'much', 'is', 'are', 'was', 'were', 'do', 'does', 'did', 'we', 'have', 'has', 'had', 'been', 'be',
   'show', 'me', 'give', 'get', 'tell', 'find', 'search', 'check', 'view',
   'this', 'daily', 'briefing', 'report', 'status',
-  'the', 'of', 'in', 'for', 'at', 'on', 'was', 'were', 'did', 'make', 'made',
-  'he', 'she', 'his', 'her', 'their', 'they', 'them', 'it', 'that', 'with', 'about', 'and',
+  'he', 'she', 'his', 'her', 'their', 'they', 'them', 'it', 'that', 'with', 'about', 'and', 'for', 'of',
+  'owe', 'owes', 'owing', 'still', 'due', 'balance', 'additional', 'difference', 'diff', 'required', 'credit', 'credits', 'change', 'changed', 'changing', 'original', 'new', 'current',
+  'return', 'returns', 'returned', 'hand', 'handed', 'over', 'cash', 'money', 'birr', 'etb',
   'help', 'hi', 'hello', 'hey', 'good', 'morning', 'afternoon', 'evening', 'there'
 ]);
 
@@ -480,7 +514,9 @@ export function getAllCustomerProfiles(appointmentsList = null) {
 
     if (!name && !phone && !ref) return;
 
-    const groupKey = phone ? phone.replace(/\D/g, '') : normalizeQuery(name);
+    const groupKey = (name && phone)
+      ? `${normalizeQuery(name)}_${phone.replace(/\D/g, '')}`
+      : (name ? normalizeQuery(name) : (phone ? phone.replace(/\D/g, '') : ref));
     if (!groupKey) return;
 
     if (!customerMap.has(groupKey)) {
@@ -708,12 +744,19 @@ export function parseCustomerIntent(rawQuery) {
   // 4. Intent detection
   let intent = 'CUSTOMER_APPOINTMENT';
 
-  if (cleanQ.includes('phone') || cleanQ.includes('contact') || cleanQ.includes('number') || cleanQ.includes('telephone') || cleanQ.includes('call')) {
+  const isCashChange = cleanQ.includes('cash change') || 
+    cleanQ.includes('return money') ||
+    cleanQ.includes('return cash') ||
+    (cleanQ.includes('change') && (cleanQ.includes('return') || cleanQ.includes('returned') || cleanQ.includes('give') || cleanQ.includes('gave') || cleanQ.includes('hand') || cleanQ.includes('money') || cleanQ.includes('cash') || cleanQ.includes('birr') || cleanQ.includes('etb') || cleanQ.includes('100') || cleanQ.includes('got') || cleanQ.includes('get') || cleanQ.includes('his change') || cleanQ.includes('her change') || cleanQ.includes('receive') || cleanQ.includes('pay')));
+
+  if (isCashChange) {
+    intent = 'CUSTOMER_CHANGE';
+  } else if (cleanQ.includes('phone') || cleanQ.includes('contact') || cleanQ.includes('number') || cleanQ.includes('telephone') || cleanQ.includes('call')) {
     intent = 'CUSTOMER_PHONE';
-  } else if (cleanQ.includes('service') || cleanQ.includes('haircut') || cleanQ.includes('cut') || cleanQ.includes('choose') || cleanQ.includes('chose') || cleanQ.includes('package') || cleanQ.includes('treatment')) {
-    intent = 'CUSTOMER_SERVICE';
-  } else if (cleanQ.includes('payment') || cleanQ.includes('paid') || cleanQ.includes('pay') || cleanQ.includes('paymnt') || cleanQ.includes('receipt') || cleanQ.includes('verified') || cleanQ.includes('unverified') || cleanQ.includes('telebirr') || cleanQ.includes('cbe') || cleanQ.includes('cost') || cleanQ.includes('price') || cleanQ.includes('how much')) {
+  } else if (cleanQ.includes('owe') || cleanQ.includes('owes') || cleanQ.includes('owing') || cleanQ.includes('balance') || cleanQ.includes('additional payment') || cleanQ.includes('payment') || cleanQ.includes('paid') || cleanQ.includes('pay') || cleanQ.includes('paymnt') || cleanQ.includes('receipt') || cleanQ.includes('verified') || cleanQ.includes('unverified') || cleanQ.includes('telebirr') || cleanQ.includes('cbe') || cleanQ.includes('cost') || cleanQ.includes('price') || cleanQ.includes('how much')) {
     intent = 'CUSTOMER_PAYMENT';
+  } else if (cleanQ.includes('service') || cleanQ.includes('haircut') || cleanQ.includes('cut') || cleanQ.includes('choose') || cleanQ.includes('chose') || cleanQ.includes('package') || cleanQ.includes('treatment') || cleanQ.includes('change') || cleanQ.includes('changed') || cleanQ.includes('original') || cleanQ.includes('new service') || cleanQ.includes('current service')) {
+    intent = 'CUSTOMER_SERVICE';
   } else if (cleanQ.includes('barber') || cleanQ.includes('barbr') || cleanQ.includes('stylist') || cleanQ.includes('who cut') || cleanQ.includes('who was his barber') || cleanQ.includes('who was her barber')) {
     intent = 'CUSTOMER_BARBER';
   } else if (cleanQ.includes('history') || cleanQ.includes('previous') || cleanQ.includes('past') || cleanQ.includes('all visits') || cleanQ.includes('lifetime') || cleanQ.includes('how many times')) {
@@ -742,6 +785,115 @@ export function parseCustomerIntent(rawQuery) {
     timeframe,
     tokens,
     cleanQ
+  };
+}
+
+// ── 5.5 COMPREHENSIVE PAYMENT VERIFICATION ENGINE ────────────────────────
+export function getPaymentVerificationDetails(appt) {
+  if (!appt) {
+    return {
+      price: 0,
+      origPrice: 0,
+      addPrice: 0,
+      actualPaid: 0,
+      remainingDue: 0,
+      isUpgraded: false,
+      isOrigVerified: false,
+      isAddSubmitted: false,
+      isAddVerified: false,
+      isFullyVerified: false,
+      isPartiallyVerified: false,
+      isUnverified: true,
+      hasReceipt: false,
+      hasAddReceipt: false,
+      statusBadge: 'Unverified',
+      verificationAction: 'Verify Payment',
+      paymentMethod: 'DIRECT'
+    };
+  }
+
+  const price = Number(appt.price) || Number(appt.amountPaid) || 400;
+  const origPrice = Number(appt.originalServicePrice || appt.originalPrice || price);
+  const isUpgraded = !!((appt.serviceUpgraded || appt.isEdited || appt.adjustmentType === 'additional_payment') && (price > origPrice));
+  const isDowngraded = !!(origPrice > price || appt.adjustmentType === 'downgrade_refund_at_shop' || (appt.overpaymentAmount > 0));
+  const overpayChange = isDowngraded ? (Number(appt.overpaymentAmount) || Math.max(0, origPrice - price)) : 0;
+  const addPrice = Number(appt.additionalAmountDue || appt.additionalSubmittedAmount || (isUpgraded ? Math.max(0, price - origPrice) : 0));
+
+  const isOrigVerified = !!(appt.originalPaymentVerified === true || appt.originalPaymentStatus === 'Verified' || (appt.paymentStatus === 'Verified' && !isUpgraded));
+  const isAddSubmitted = !!(appt.additionalReceiptSubmitted || appt.additionalReceiptPreview || appt.additionalPaymentStatus === 'Pending Verification' || (Number(appt.additionalSubmittedAmount) > 0));
+  const isAddVerified = !!(appt.additionalPaymentVerified === true || appt.additionalPaymentStatus === 'Verified');
+
+  const isFullyVerified = isUpgraded ? (isOrigVerified && isAddVerified) : (appt.paymentStatus === 'Verified');
+  const isPartiallyVerified = isUpgraded && isOrigVerified && !isAddVerified;
+  const isUnverified = !isFullyVerified && !isPartiallyVerified;
+
+  const actualPaid = appt.paidAmount !== undefined
+    ? Number(appt.paidAmount)
+    : (isFullyVerified ? price : (isPartiallyVerified ? origPrice : 0));
+
+  const remainingDue = appt.remainingAmount !== undefined
+    ? Number(appt.remainingAmount)
+    : (isDowngraded ? 0 : (isFullyVerified ? 0 : (isPartiallyVerified ? addPrice : (isUpgraded && isAddSubmitted ? addPrice : price))));
+
+  const hasReceipt = !!(appt.receiptPreview || appt.originalReceiptPreview || appt.receiptFileName);
+  const hasAddReceipt = !!(appt.additionalReceiptPreview || appt.additionalReceiptSubmitted);
+  const paymentMethod = (appt.paymentMethod || 'Direct Transfer').toUpperCase();
+
+  let statusBadge = 'Verification Pending';
+  let verificationAction = 'Verify Payment';
+  const isShopRefundHandedOver = Boolean(appt.shopRefundHandedOver);
+  const shopRefundHandedOverAt = appt.shopRefundHandedOverAt || null;
+  const shopRefundHandedOverBy = appt.shopRefundHandedOverBy || null;
+
+  if (isFullyVerified) {
+    statusBadge = isDowngraded 
+      ? `Verified ✓ (Overpayment: ${overpayChange} ETB change ${isShopRefundHandedOver ? 'Returned ✓' : 'Due at shop'})`
+      : 'Verified ✓';
+    verificationAction = isDowngraded
+      ? (isShopRefundHandedOver ? 'Already Verified & Change Returned ✓' : `Already Verified (Give ${overpayChange} ETB change)`)
+      : 'Already Verified';
+  } else if (isDowngraded) {
+    statusBadge = `Verification Pending (${origPrice} ETB receipt submitted, ${price} ETB service — ${isShopRefundHandedOver ? `${overpayChange} ETB change returned ✓` : `Return ${overpayChange} ETB Cash Change`})`;
+    verificationAction = isShopRefundHandedOver ? `Verify Payment (${origPrice} ETB)` : `Verify Payment & Return ${overpayChange} ETB Change`;
+  } else if (isUpgraded) {
+    if (!isOrigVerified && isAddSubmitted) {
+      statusBadge = `Unverified (${actualPaid} ETB Paid, +${addPrice} ETB Additional Submitted, +${remainingDue} ETB Due)`;
+      verificationAction = `Verify All (${price} ETB)`;
+    } else if (isOrigVerified && isAddSubmitted) {
+      statusBadge = `Original Verified (${origPrice} ETB), Additional Pending (+${addPrice} ETB)`;
+      verificationAction = `Verify +${addPrice} ETB`;
+    } else if (isOrigVerified && !isAddSubmitted) {
+      statusBadge = `Original Verified (${origPrice} ETB), Additional +${addPrice} ETB Due`;
+      verificationAction = `Collect Additional +${addPrice} ETB`;
+    } else {
+      statusBadge = `Verification Pending (Total ${price} ETB)`;
+      verificationAction = `Verify Payment (${price} ETB)`;
+    }
+  }
+
+  return {
+    price,
+    origPrice,
+    addPrice,
+    actualPaid,
+    remainingDue,
+    isUpgraded,
+    isDowngraded,
+    overpayChange,
+    isShopRefundHandedOver,
+    shopRefundHandedOverAt,
+    shopRefundHandedOverBy,
+    isOrigVerified,
+    isAddSubmitted,
+    isAddVerified,
+    isFullyVerified,
+    isPartiallyVerified,
+    isUnverified,
+    hasReceipt,
+    hasAddReceipt,
+    statusBadge,
+    verificationAction,
+    paymentMethod
   };
 }
 
@@ -782,14 +934,19 @@ export function calculateStaffMetrics(period = 'today', appointmentsList = null,
   const completedAppointments = filtered.filter(a => a.status === 'Completed' || a.bookingStatus === 'Completed');
   const inChairAppointments = filtered.filter(a => a.status === 'In-Chair' || a.bookingStatus === 'In-Chair');
   const confirmedAppointments = filtered.filter(a => a.status === 'Confirmed' || a.bookingStatus === 'Confirmed');
-  const verifiedPayments = filtered.filter(a => a.paymentStatus === 'Verified');
-  const pendingPayments = filtered.filter(a => 
-    a.paymentStatus !== 'Verified' && 
-    a.status !== 'Completed' && 
-    a.bookingStatus !== 'Completed' && 
-    !a.status?.includes('Cancelled') && 
-    !a.bookingStatus?.includes('Cancelled')
-  );
+  const verifiedPayments = filtered.filter(a => {
+    const details = getPaymentVerificationDetails(a);
+    return details.isFullyVerified;
+  });
+
+  const pendingPayments = filtered.filter(a => {
+    const details = getPaymentVerificationDetails(a);
+    return !details.isFullyVerified && 
+           a.status !== 'Completed' && 
+           a.bookingStatus !== 'Completed' && 
+           !a.status?.includes('Cancelled') && 
+           !a.bookingStatus?.includes('Cancelled');
+  });
 
   const cancelledAppointments = filtered.filter(a => 
     a.status === 'Cancelled' || 
@@ -806,14 +963,26 @@ export function calculateStaffMetrics(period = 'today', appointmentsList = null,
     a.bookingStatus === 'Cancelled — Refund Completed'
   );
 
-  // Realized revenue: verified payments or completed services that are NOT cancelled
+  // Realized revenue: strictly counts verified collected payments (or completed services)
   const realizedRevenue = filtered
-    .filter(a => ((a.status === 'Completed' || a.bookingStatus === 'Completed') || a.paymentStatus === 'Verified') && 
+    .filter(a => ((a.status === 'Completed' || a.bookingStatus === 'Completed') || (Number(a.paidAmount) > 0) || a.paymentStatus === 'Verified') && 
                  !a.status?.includes('Cancelled') && !a.bookingStatus?.includes('Cancelled'))
-    .reduce((sum, a) => sum + (Number(a.price) || Number(a.amountPaid) || 0), 0);
+    .reduce((sum, a) => {
+      const details = getPaymentVerificationDetails(a);
+      const isCompleted = a.status === 'Completed' || a.bookingStatus === 'Completed';
+      return sum + (isCompleted ? details.price : details.actualPaid);
+    }, 0);
 
   const bookedValue = filtered.reduce((sum, a) => sum + (Number(a.price) || Number(a.amountPaid) || 0), 0);
-  const pendingRevenue = pendingPayments.reduce((sum, a) => sum + (Number(a.price) || Number(a.amountPaid) || 0), 0);
+  
+  // Pending revenue: unverified bookings plus remaining balance due from upgrades
+  const pendingRevenue = filtered
+    .filter(a => !a.status?.includes('Cancelled') && !a.bookingStatus?.includes('Cancelled'))
+    .reduce((sum, a) => {
+      const details = getPaymentVerificationDetails(a);
+      return sum + details.remainingDue;
+    }, 0);
+
   const refundedAmount = refundedAppointments.reduce((sum, a) => sum + (Number(a.price) || Number(a.amountPaid) || 0), 0);
   const cancelledAmount = cancelledAppointments.reduce((sum, a) => sum + (Number(a.price) || Number(a.amountPaid) || 0), 0);
 
@@ -857,10 +1026,18 @@ export function calculateStaffMetrics(period = 'today', appointmentsList = null,
     if (isVerified) barberMap[bId].verifiedCount++;
     if (isCancelled) barberMap[bId].cancelledCount++;
 
-    if ((isCompleted || isVerified) && !isCancelled) {
-      barberMap[bId].realizedRevenue += (Number(a.price) || Number(a.amountPaid) || 0);
-    } else if (!isCancelled && (a.paymentStatus === 'Verification Pending' || a.paymentStatus === 'Pending')) {
-      barberMap[bId].pendingRevenue += (Number(a.price) || Number(a.amountPaid) || 0);
+    if ((isCompleted || isVerified || (Number(a.paidAmount) > 0)) && !isCancelled) {
+      const currentPrice = Number(a.price) || Number(a.amountPaid) || 0;
+      let actualCollected = a.paidAmount !== undefined ? Number(a.paidAmount) : (isVerified || isCompleted ? currentPrice : 0);
+      const realized = Math.min(actualCollected, currentPrice);
+      barberMap[bId].realizedRevenue += (isCompleted ? currentPrice : realized);
+    } 
+    if (!isCancelled) {
+      if (a.remainingAmount !== undefined && Number(a.remainingAmount) > 0) {
+        barberMap[bId].pendingRevenue += Number(a.remainingAmount);
+      } else if (a.paymentStatus === 'Verification Pending' || a.paymentStatus === 'Pending' || a.paymentStatus === 'Additional Payment Due') {
+        barberMap[bId].pendingRevenue += (Number(a.price) || Number(a.amountPaid) || 0);
+      }
     }
   });
 
@@ -895,9 +1072,11 @@ export function calculateStaffMetrics(period = 'today', appointmentsList = null,
     const isCompleted = a.status === 'Completed' || a.bookingStatus === 'Completed';
     const isCancelled = a.status?.includes('Cancelled') || a.bookingStatus?.includes('Cancelled');
 
-    if (isCompleted) serviceMap[sId].completedCount++;
-    if ((isCompleted || a.paymentStatus === 'Verified') && !isCancelled) {
-      serviceMap[sId].revenue += (Number(a.price) || Number(a.amountPaid) || 0);
+    if ((isCompleted || a.paymentStatus === 'Verified' || (Number(a.paidAmount) > 0)) && !isCancelled) {
+      const currentPrice = Number(a.price) || Number(a.amountPaid) || 0;
+      let actualCollected = a.paidAmount !== undefined ? Number(a.paidAmount) : (a.paymentStatus === 'Verified' || isCompleted ? currentPrice : 0);
+      const realized = Math.min(actualCollected, currentPrice);
+      serviceMap[sId].revenue += (isCompleted ? currentPrice : realized);
     }
   });
 
@@ -958,9 +1137,37 @@ export function formatCustomerFullDossier(cust, targetAppt = null) {
 
   header += `📋 **CURRENT / LATEST APPOINTMENT (${refCode})**\n`;
   header += `• **Date & Time**: ${dateDisplay} at ${timeDisplay}\n`;
-  header += `• **Service**: ${sName} (${price} ETB)\n`;
+  const origPrice = Number(appt?.originalServicePrice || appt?.originalPrice || price);
+  const isDowngraded = Boolean(origPrice > price || appt?.adjustmentType === 'downgrade_refund_at_shop' || (appt?.overpaymentAmount > 0));
+  const overpayChange = isDowngraded ? (Number(appt?.overpaymentAmount) || (origPrice - price)) : 0;
+
+  if (appt?.serviceUpgraded && price > origPrice) {
+    header += `• **Service**: ${sName} (${price} ETB) — *Upgraded from ${appt.originalServiceName || 'Original Service'} (${origPrice} ETB)*\n`;
+  } else if (isDowngraded) {
+    header += `• **Service**: ${sName} (${price} ETB) — *Changed from ${appt.originalServiceName || 'Original Service'} (${origPrice} ETB)*\n`;
+  } else {
+    header += `• **Service**: ${sName} (${price} ETB)\n`;
+  }
   header += `• **Barber**: ${bName}\n`;
-  header += `• **Payment**: ${price} ETB (${paymentStatus} via ${paymentMethod})\n`;
+  
+  if (appt?.serviceUpgraded && price > origPrice) {
+    const origStatus = appt.originalPaymentVerified ? 'Verified' : 'Pending Verification';
+    const addStatus = appt.additionalPaymentVerified ? 'Verified' : (appt.additionalReceiptSubmitted ? 'Additional Receipt Attached (Pending Verification)' : 'Unpaid / Pending Submission');
+    const remainingDue = appt.additionalPaymentVerified ? 0 : (appt.additionalAmountDue || (price - origPrice));
+    header += `• **Payment Breakdown**: Total ${price} ETB\n`;
+    header += `  - Original Service: ${origPrice} ETB (${origStatus})\n`;
+    header += `  - Additional Balance: ${appt.additionalAmountDue || (price - origPrice)} ETB (${addStatus})\n`;
+    header += `  - Remaining Balance Due: **${remainingDue} ETB**\n`;
+  } else if (isDowngraded && overpayChange > 0) {
+    const isHandedOver = Boolean(appt?.shopRefundHandedOver);
+    header += `• **Payment Breakdown**: ${sName} (${price} ETB · ${paymentStatus} via ${paymentMethod})\n`;
+    header += `  - Receipt Submitted: ${origPrice} ETB\n`;
+    header += `  - Cash Change (${overpayChange} ETB): ${isHandedOver ? '✅ Handed Over ✓ (Returned in cash at shop)' : '❌ Pending Return at Shop (Not handed over yet)'}\n`;
+    header += `  - Remaining Balance Due: **0 ETB**\n`;
+  } else {
+    header += `• **Payment**: ${price} ETB (${paymentStatus} via ${paymentMethod})\n`;
+  }
+
   header += `• **Appointment Status**: ${apptStatus}\n`;
   if (refundStatus !== 'None') {
     header += `• **Refund Status**: ${refundStatus}\n`;
@@ -1117,8 +1324,25 @@ export function selectAppointmentEntity(refOrId, referenceDate = null) {
   };
 }
 
-export function processStaffQuery(rawQuery, referenceDate = null) {
-  const refDate = referenceDate || getSystemNow();
+export function processStaffQuery(rawQuery, appointmentsListOrRefDate = null, referenceDate = null) {
+  let appointmentsList = null;
+  let refDate = null;
+
+  if (Array.isArray(appointmentsListOrRefDate)) {
+    appointmentsList = appointmentsListOrRefDate;
+    setInMemoryStaffAppointments(appointmentsList);
+    refDate = referenceDate instanceof Date ? referenceDate : getSystemNow();
+  } else if (appointmentsListOrRefDate instanceof Date) {
+    refDate = appointmentsListOrRefDate;
+  } else if (appointmentsListOrRefDate && typeof appointmentsListOrRefDate === 'object') {
+    if (appointmentsListOrRefDate.appointmentsList) {
+      appointmentsList = appointmentsListOrRefDate.appointmentsList;
+      setInMemoryStaffAppointments(appointmentsList);
+    }
+    refDate = appointmentsListOrRefDate.referenceDate || null;
+  }
+
+  refDate = refDate || (referenceDate instanceof Date ? referenceDate : getSystemNow());
   // ── [PRIORITY 0] EXACT UI ENTITY SELECTION DISPATCHER ──────────────────
   if (rawQuery && typeof rawQuery === 'object') {
     if (rawQuery.type === 'customer_selection' || rawQuery.action === 'select_customer') {
@@ -1238,7 +1462,7 @@ export function processStaffQuery(rawQuery, referenceDate = null) {
   const parsedCustomer = parseCustomerIntent(query);
   const candidateName = parsedCustomer.candidateName;
 
-  const matchedCustomerProfiles = (!isBarberPerformanceKeyword && candidateName.length >= 2) ? findCustomerProfiles(candidateName) : [];
+  const matchedCustomerProfiles = (!isBarberPerformanceKeyword && candidateName.length >= 2) ? findCustomerProfiles(candidateName, appointmentsList) : [];
   const isExplicitCustomerMatch = matchedCustomerProfiles.length >= 1;
 
   // Match Barber if present
@@ -1432,8 +1656,112 @@ export function processStaffQuery(rawQuery, referenceDate = null) {
     const apptStatus = targetAppt?.status || targetAppt?.bookingStatus || 'Confirmed';
     const refCode = targetAppt?.ref || targetAppt?.bookingReference || 'N/A';
 
-    // A. Customer Service Intent (e.g. "what service did belete choose?", "what did belete get yesterday?")
+    // 0. Customer Cash Change Intent (e.g. "did we return bvvvvv's change?", "did bvvvvv get his change?")
+    if (parsedCustomer.intent === 'CUSTOMER_CHANGE') {
+      const changeAppt = cust.activeAppointments?.find(a => 
+        a.adjustmentType === 'downgrade_refund_at_shop' || 
+        (a.overpaymentAmount > 0) || 
+        (a.originalPrice && Number(a.originalPrice) > Number(a.price))
+      ) || cust.allAppointments?.find(a => 
+        a.adjustmentType === 'downgrade_refund_at_shop' || 
+        (a.overpaymentAmount > 0) || 
+        (a.originalPrice && Number(a.originalPrice) > Number(a.price))
+      );
+
+      if (changeAppt) {
+        const changeAmt = changeAppt.overpaymentAmount || (Number(changeAppt.originalPrice) - Number(changeAppt.price));
+        const isHandedOver = Boolean(changeAppt.shopRefundHandedOver);
+
+        return {
+          text: isHandedOver
+            ? `✅ **Yes** — **${custName}**'s **${changeAmt} ETB** cash change has already been **Handed Over ✓** at the shop (marked returned by staff).`
+            : `❌ **No** — **${custName}** has not received his **${changeAmt} ETB** cash change yet (Status: **Pending Return ❌**). Please remember to hand him **${changeAmt} ETB in cash** when he arrives for his haircut at the front desk.`,
+          cardType: 'booking_card',
+          cardData: changeAppt,
+          suggestions: [
+            { label: "View Appointment", prompt: `Show me ${custName}` },
+            { label: "Was payment verified?", prompt: `Was ${custName}'s payment verified?` }
+          ]
+        };
+      } else {
+        return {
+          text: `ℹ️ **${custName}** does not have any cash change due. He booked **${targetAppt?.serviceName || 'Service'}** (${targetAppt?.price || 0} ETB · ${targetAppt?.paymentStatus || 'Confirmed'}).`,
+          cardType: 'booking_card',
+          cardData: targetAppt,
+          suggestions: [
+            { label: "Appointment Details", prompt: `Show me ${custName}` },
+            { label: "Who is owed change?", prompt: "who is still owed change?" }
+          ]
+        };
+      }
+    }
+
+    // A. Customer Service Intent (e.g. "what service did belete choose?", "did belete change his service?", "what was the original service?", "what is the new service?")
     if (parsedCustomer.intent === 'CUSTOMER_SERVICE') {
+      const isServiceChangeQuery = parsedCustomer.cleanQ.includes('change') || parsedCustomer.cleanQ.includes('changed') || parsedCustomer.cleanQ.includes('switch');
+      const isOriginalServiceQuery = parsedCustomer.cleanQ.includes('original');
+      const isCurrentServiceQuery = parsedCustomer.cleanQ.includes('new service') || parsedCustomer.cleanQ.includes('current service') || parsedCustomer.cleanQ.includes('what is the new') || parsedCustomer.cleanQ.includes('what is the current');
+
+      if (isOriginalServiceQuery) {
+        const origName = targetAppt?.originalServiceName || sName;
+        const origPrice = targetAppt?.originalPrice !== undefined ? targetAppt.originalPrice : price;
+        const responseText = (origName !== sName)
+          ? `✂️ The original service booked by **${custName}** was **${origName}** (${origPrice} ETB). It was updated to **${sName}** (${price} ETB).`
+          : `✂️ **${custName}**'s original service is **${sName}** (${price} ETB) with **${bName}**.`;
+        return {
+          text: responseText,
+          cardType: 'booking_card',
+          cardData: targetAppt,
+          suggestions: [
+            { label: "New Service", prompt: `What is ${custName}'s new service?` },
+            { label: "How much does he owe?", prompt: `How much does ${custName} still owe?` }
+          ]
+        };
+      }
+
+      if (isCurrentServiceQuery) {
+        return {
+          text: `✂️ The current service for **${custName}** is **${sName}** (${price} ETB) with **${bName}** on **${dateStr}** at **${timeStr}**.`,
+          cardType: 'booking_card',
+          cardData: targetAppt,
+          suggestions: [
+            { label: "Original Service", prompt: `What was ${custName}'s original service?` },
+            { label: "Payment Status", prompt: `Was ${custName}'s payment verified?` }
+          ]
+        };
+      }
+
+      if (isServiceChangeQuery) {
+        const hasChanged = Boolean(targetAppt?.originalServiceName && targetAppt.originalServiceName !== sName) || (targetAppt?.adjustmentType && targetAppt.adjustmentType !== 'none');
+        if (hasChanged) {
+          let changeDetails = '';
+          if (targetAppt.adjustmentType === 'additional_payment') {
+            changeDetails = ` An additional payment of **${targetAppt.remainingAmount} ETB** is required.`;
+          } else if (targetAppt.adjustmentType === 'refund_or_credit') {
+            changeDetails = ` He has a refund/credit of **${targetAppt.adjustmentAmount} ETB** due.`;
+          }
+          return {
+            text: `✂️ **Yes** — **${custName}** changed his service from **${targetAppt.originalServiceName || 'original service'}** (${targetAppt.originalPrice} ETB) to **${sName}** (${price} ETB).${changeDetails}`,
+            cardType: 'booking_card',
+            cardData: targetAppt,
+            suggestions: [
+              { label: "How much does he owe?", prompt: `How much does ${custName} still owe?` },
+              { label: "Was payment verified?", prompt: `Was ${custName}'s payment verified?` }
+            ]
+          };
+        } else {
+          return {
+            text: `No — **${custName}** has not changed his service. He is scheduled for **${sName}** (${price} ETB) with **${bName}**.`,
+            cardType: 'booking_card',
+            cardData: targetAppt,
+            suggestions: [
+              { label: "Appointment Time", prompt: `When is ${custName}'s appointment?` },
+              { label: "Was payment verified?", prompt: `Was ${custName}'s payment verified?` }
+            ]
+          };
+        }
+      }
+
       return {
         text: `✂️ **${custName}** chose **${sName}** (${price} ETB) with **${bName}** on **${dateStr}** at **${timeStr}** (${apptStatus} · ${payStatus}).`,
         cardType: 'booking_card',
@@ -1446,12 +1774,128 @@ export function processStaffQuery(rawQuery, referenceDate = null) {
       };
     }
 
-    // B. Customer Payment Intent (e.g. "was belete's payment verified?", "belete paymnt", "how much did belete pay?")
+    // B. Customer Payment Intent (e.g. "was belete's payment verified?", "how much does benjamin still owe?", "how much has he paid?", "what is the current appointment price?")
     if (parsedCustomer.intent === 'CUSTOMER_PAYMENT') {
-      const isVerified = payStatus === 'Verified';
-      const statusText = isVerified 
-        ? `💳 **Yes** — **${custName}**'s payment of **${price} ETB** for **${sName}** is **Verified** ✓ (via ${payMethod}).`
-        : `⏳ **${custName}**'s payment of **${price} ETB** for **${sName}** is currently **${payStatus}** (Receipt submitted, awaiting staff review).`;
+      const isOweQuery = parsedCustomer.cleanQ.includes('owe') || parsedCustomer.cleanQ.includes('owes') || parsedCustomer.cleanQ.includes('owing') || parsedCustomer.cleanQ.includes('balance') || parsedCustomer.cleanQ.includes('additional payment') || parsedCustomer.cleanQ.includes('additional') || parsedCustomer.cleanQ.includes('still owe');
+      const isPriceQuery = parsedCustomer.cleanQ.includes('current appointment price') || parsedCustomer.cleanQ.includes('current price') || (parsedCustomer.cleanQ.includes('what is') && parsedCustomer.cleanQ.includes('price')) || parsedCustomer.cleanQ.includes('how much is the service');
+      const isHowMuchPaidQuery = parsedCustomer.cleanQ.includes('how much has he paid') || parsedCustomer.cleanQ.includes('how much did he pay') || parsedCustomer.cleanQ.includes('how much paid') || parsedCustomer.cleanQ.includes('what did he pay') || parsedCustomer.cleanQ.includes('how much he paid');
+
+      const details = getPaymentVerificationDetails(targetAppt);
+      const isVerified = details.isFullyVerified;
+      const actualPaid = details.actualPaid;
+      const remainingDue = details.remainingDue;
+      const price = details.price;
+
+      if (isOweQuery) {
+        if (details.isUpgraded && remainingDue > 0) {
+          const origNote = details.isOrigVerified 
+            ? `Initial payment of ${details.origPrice} ETB is Verified ✓` 
+            : `Initial payment of ${details.origPrice} ETB is UNVERIFIED (0 ETB paid)`;
+          return {
+            text: `💳 **${custName}** has an outstanding balance of **${remainingDue} ETB** for **${sName}** (Total: ${price} ETB, ${origNote}${details.isAddSubmitted ? ', additional receipt submitted' : ''}).`,
+            cardType: 'booking_card',
+            cardData: targetAppt,
+            suggestions: [
+              { label: "Did he change service?", prompt: `Did ${custName} change his service?` },
+              { label: "Verify Payment", prompt: `Was ${custName}'s payment verified?` }
+            ]
+          };
+        } else if (targetAppt?.adjustmentType === 'downgrade_refund_at_shop' || (details.isDowngraded && details.overpayChange > 0)) {
+          const overpay = targetAppt.overpaymentAmount || details.overpayChange;
+          return {
+            text: `💚 **${custName}** does not owe anything! He changed to a cheaper service: **${sName}** (${price} ETB, down from ${details.origPrice} ETB). He is due **${overpay} ETB cash change** back in person when he arrives for his haircut.`,
+            cardType: 'booking_card',
+            cardData: targetAppt,
+            suggestions: [
+              { label: "Original Service", prompt: `What was ${custName}'s original service?` },
+              { label: "Customer Phone", prompt: `What is ${custName}'s phone number?` }
+            ]
+          };
+        } else if (targetAppt?.adjustmentType === 'refund_or_credit') {
+          return {
+            text: `💚 **${custName}** does not owe anything! He has a **refund/credit of ${targetAppt.adjustmentAmount} ETB** due because he changed from **${targetAppt.originalServiceName}** (${targetAppt.originalPrice} ETB) to **${sName}** (${price} ETB).`,
+            cardType: 'booking_card',
+            cardData: targetAppt,
+            suggestions: [
+              { label: "Original Service", prompt: `What was ${custName}'s original service?` },
+              { label: "Customer Phone", prompt: `What is ${custName}'s phone number?` }
+            ]
+          };
+        } else if (isVerified) {
+          return {
+            text: `✅ **${custName}** does not owe anything. His payment of **${price} ETB** for **${sName}** is fully **Verified** ✓.`,
+            cardType: 'booking_card',
+            cardData: targetAppt,
+            suggestions: [
+              { label: "Service Details", prompt: `What service did ${custName} choose?` },
+              { label: "Appointment Time", prompt: `When is ${custName}'s appointment?` }
+            ]
+          };
+        } else {
+          return {
+            text: `⏳ **${custName}**'s payment of **${price} ETB** for **${sName}** is currently **Verification Pending** (owes ${price} ETB).`,
+            cardType: 'booking_card',
+            cardData: targetAppt,
+            suggestions: [
+              { label: "Verify Payment", prompt: `Was ${custName}'s payment verified?` },
+              { label: "Contact Phone", prompt: `What is ${custName}'s phone number?` }
+            ]
+          };
+        }
+      }
+
+      if (isPriceQuery) {
+        return {
+          text: `🏷️ The current appointment price for **${custName}** (${sName}) is **${price} ETB**${details.isUpgraded ? ` (Upgraded from ${details.origPrice} ETB)` : ''}.`,
+          cardType: 'booking_card',
+          cardData: targetAppt,
+          suggestions: [
+            { label: "How much did he pay?", prompt: `How much has ${custName} paid?` },
+            { label: "How much does he owe?", prompt: `How much does ${custName} still owe?` }
+          ]
+        };
+      }
+
+      if (isHowMuchPaidQuery) {
+        let paidDesc = '';
+        if (details.isFullyVerified) {
+          paidDesc = `has paid **${price} ETB** in full (**Verified ✓**)`;
+        } else if (details.isPartiallyVerified) {
+          paidDesc = `has **${details.actualPaid} ETB paid and Verified ✓** for original service, with **+${details.addPrice} ETB** additional balance due`;
+        } else if (details.isUpgraded && !details.isOrigVerified) {
+          paidDesc = `has **0 ETB verified paid** so far. Total for **${sName}** is **${price} ETB** (${details.origPrice} ETB original + ${details.addPrice} ETB upgrade balance due)`;
+        } else if (details.isDowngraded && details.overpayChange > 0) {
+          paidDesc = `submitted a receipt for **${details.origPrice} ETB** for **${sName}** (${price} ETB service). He is due **${details.overpayChange} ETB cash change** back at the shop`;
+        } else {
+          paidDesc = `has a booking of **${price} ETB** (**Verification Pending**)`;
+        }
+        return {
+          text: `💳 **${custName}** ${paidDesc} for **${sName}**.`,
+          cardType: 'booking_card',
+          cardData: targetAppt,
+          suggestions: [
+            { label: "How much does he owe?", prompt: `How much does ${custName} still owe?` },
+            { label: "Was payment verified?", prompt: `Was ${custName}'s payment verified?` }
+          ]
+        };
+      }
+
+      let statusText = '';
+      if (details.isFullyVerified) {
+        statusText = `✅ **Yes** — **${custName}**'s payment of **${price} ETB** for **${sName}** is **Fully Verified ✓** (via ${details.paymentMethod}).`;
+      } else if (details.isPartiallyVerified) {
+        statusText = `⏳ **Partially Verified** — **${custName}**'s original payment of **${details.origPrice} ETB** is **Verified ✓**, but the additional upgrade balance of **+${details.addPrice} ETB** for **${sName}** is **Pending Verification** (${details.isAddSubmitted ? 'Additional receipt attached, awaiting staff review' : 'No additional receipt attached yet'}).`;
+      } else if (details.isUpgraded && !details.isOrigVerified) {
+        statusText = `⏳ **No** — **${custName}**'s payment for **${sName}** (${price} ETB) is **UNVERIFIED** (0 ETB verified paid so far).\n\n• **Original Service (${details.origPrice} ETB)**: Unverified / Pending Verification\n• **Additional Upgrade (+${details.addPrice} ETB)**: ${details.isAddSubmitted ? 'Receipt attached, Pending Verification' : 'Pending Submission'} (+${remainingDue} ETB Due)\n• **Total Outstanding**: **${price} ETB**\n• **Dashboard Action Required**: Review receipts and click **"Verify All (${price} ETB)"** to verify.`;
+      } else if (targetAppt?.adjustmentType === 'downgrade_refund_at_shop' || (details.isDowngraded && details.overpayChange > 0)) {
+        const overpay = targetAppt.overpaymentAmount || details.overpayChange;
+        statusText = `💵 **${custName}** changed service from **${targetAppt.originalServiceName || 'original service'}** (${details.origPrice} ETB) to **${sName}** (${price} ETB). ${isVerified ? 'Payment is Verified ✓' : 'Payment receipt is Verification Pending'}. Staff must **return ${overpay} ETB cash change** to him at the shop when he arrives for his haircut.`;
+      } else if (targetAppt?.adjustmentType === 'refund_or_credit') {
+        statusText = `💚 **${custName}** paid **${actualPaid} ETB** (Verified) and changed to **${sName}** (${price} ETB). Refund/credit due: **${targetAppt.adjustmentAmount} ETB**.`;
+      } else {
+        statusText = `⏳ **No** — **${custName}**'s payment of **${price} ETB** for **${sName}** is currently **Verification Pending** (awaiting staff review via the "Verify Payment" button).`;
+      }
+
       return {
         text: statusText,
         cardType: 'booking_card',
@@ -1520,8 +1964,28 @@ export function processStaffQuery(rawQuery, referenceDate = null) {
     );
 
     if (!isSpecialLifecycleIntent && targetAppt) {
+      const details = getPaymentVerificationDetails(targetAppt);
+      let payDesc = '';
+      if (details.isFullyVerified) {
+        payDesc = details.isDowngraded && details.overpayChange > 0
+          ? `Verified ✓ (${details.overpayChange} ETB change ${details.isShopRefundHandedOver ? 'returned ✓' : 'due at shop'})`
+          : `Verified ✓ (via ${details.paymentMethod})`;
+      } else if (details.isPartiallyVerified) {
+        payDesc = `Original Verified (${details.origPrice} ETB), Additional Pending (+${details.addPrice} ETB)`;
+      } else if (details.isUpgraded && !details.isOrigVerified) {
+        payDesc = `UNVERIFIED — 0 ETB Paid, +${details.addPrice} ETB Additional Submitted, +${details.remainingDue} ETB Due (Click "Verify All")`;
+      } else if (details.isDowngraded && details.overpayChange > 0) {
+        payDesc = `Verification Pending (${details.origPrice} ETB receipt submitted — ${details.isShopRefundHandedOver ? `${details.overpayChange} ETB change returned ✓` : `Return ${details.overpayChange} ETB cash change at shop`})`;
+      } else {
+        payDesc = `Verification Pending (via ${details.paymentMethod})`;
+      }
+
+      const upgradeHeader = details.isUpgraded 
+        ? ` (Upgraded from ${targetAppt.originalServiceName || 'Original Service'} ${details.origPrice} ETB)` 
+        : (details.isDowngraded && details.overpayChange > 0 ? ` (Changed from ${targetAppt.originalServiceName || 'Original Service'} ${details.origPrice} ETB — ${details.isShopRefundHandedOver ? `${details.overpayChange} ETB change returned ✓` : `Return ${details.overpayChange} ETB change at shop`})` : '');
+
       return {
-        text: `👤 **${custName}'s Appointment**:\n\n📅 **Date & Time**: ${dateStr} — ${timeStr}\n✂️ **Service**: **${sName}** (${price} ETB)\n💈 **Barber**: **${bName}**\n💰 **Price**: ${price} ETB\n💳 **Payment**: ${payStatus} (via ${payMethod})\n📋 **Reference**: ${refCode}\n📌 **Status**: ${apptStatus}`,
+        text: `👤 **${custName}'s Appointment**:\n\n📅 **Date & Time**: ${dateStr} — ${timeStr}\n✂️ **Service**: **${sName}** (${price} ETB)${upgradeHeader}\n💈 **Barber**: **${bName}**\n💰 **Price**: ${price} ETB (Paid so far: ${details.actualPaid} ETB${details.remainingDue > 0 ? `, Remaining Due: ${details.remainingDue} ETB` : ''})\n💳 **Payment**: ${payDesc}\n📋 **Reference**: ${refCode}\n📌 **Status**: ${apptStatus}`,
         cardType: 'booking_card',
         cardData: targetAppt,
         suggestions: [
@@ -1614,10 +2078,17 @@ export function processStaffQuery(rawQuery, referenceDate = null) {
 
     // C. Payment follow-up (e.g. "was payment verified?", "was it paid?", "did he pay?", "how much?")
     if (q.includes('payment') || q.includes('paid') || q.includes('pay') || q.includes('verified') || q.includes('cost') || q.includes('price') || q.includes('how much') || q.includes('receipt')) {
-      const isVerified = payStatus === 'Verified';
-      const statusText = isVerified 
-        ? `✅ **Yes** — **${custName}**'s payment of **${price} ETB** was **Verified** via ${payMethod}.`
-        : `⏳ **${custName}**'s payment of **${price} ETB** is currently **Verification Pending** (via ${payMethod}).`;
+      const details = getPaymentVerificationDetails(targetAppt);
+      let statusText = '';
+      if (details.isFullyVerified) {
+        statusText = `✅ **Yes** — **${custName}**'s payment of **${details.price} ETB** was **Fully Verified ✓** via ${details.paymentMethod}.`;
+      } else if (details.isPartiallyVerified) {
+        statusText = `⏳ **Partially Verified** — **${custName}**'s original payment of **${details.origPrice} ETB** is **Verified ✓**, but the additional **+${details.addPrice} ETB** is **Pending Verification** (${details.isAddSubmitted ? 'Additional receipt attached' : 'Pending submission'}).`;
+      } else if (details.isUpgraded && !details.isOrigVerified) {
+        statusText = `⏳ **No** — **${custName}**'s payment for **${details.price} ETB** is **UNVERIFIED** (0 ETB verified paid so far, +${details.addPrice} ETB additional receipt submitted, +${details.remainingDue} ETB balance due). Staff can click **"Verify All (${details.price} ETB)"** on the dashboard.`;
+      } else {
+        statusText = `⏳ **No** — **${custName}**'s payment of **${details.price} ETB** for **${sName}** is currently **Verification Pending** (awaiting staff review via the "Verify Payment" button).`;
+      }
 
       return {
         text: statusText,
@@ -1992,6 +2463,108 @@ export function processStaffQuery(rawQuery, referenceDate = null) {
     };
   }
 
+  // ── [PRIORITY 4.5] CASH CHANGE & SERVICE DOWNGRADE INTENT ─────────────
+  const isCashChangeKeyword = (
+    q.includes('change') ||
+    q.includes('return money') ||
+    q.includes('return cash') ||
+    q.includes('cash change') ||
+    q.includes('handed over') ||
+    q.includes('hand over') ||
+    q.includes('give change') ||
+    q.includes('gave change') ||
+    q.includes('returned') ||
+    (q.includes('return') && (q.includes('birr') || q.includes('etb') || q.includes('100') || q.includes('cash') || q.includes('money')))
+  );
+
+  if (isCashChangeKeyword && !q.includes('chair') && !q.includes('complete')) {
+    const allAppts = getAuthoritativeAppointments();
+
+    // A. Specific Customer Change Query
+    const hasCustomerPronoun = tokens.includes('he') || tokens.includes('she') || tokens.includes('his') || tokens.includes('her') || tokens.includes('him');
+    const isCustomerChangeQuery = isExplicitCustomerMatch || (currentStaffContext.activeCustomer && (hasCustomerPronoun || q.includes(currentStaffContext.activeCustomer.customerName.toLowerCase())));
+
+    if (resolvedCustomer && isCustomerChangeQuery && !q.startsWith('who')) {
+      currentStaffContext.activeCustomer = resolvedCustomer;
+      currentStaffContext.activeAppointment = resolvedAppt;
+      const custName = resolvedCustomer.customerName;
+
+      // Find downgraded appointment for this customer
+      const changeAppt = resolvedCustomer.activeAppointments?.find(a => 
+        a.adjustmentType === 'downgrade_refund_at_shop' || 
+        (a.overpaymentAmount > 0) || 
+        (a.originalPrice && Number(a.originalPrice) > Number(a.price))
+      ) || resolvedCustomer.allAppointments?.find(a => 
+        a.adjustmentType === 'downgrade_refund_at_shop' || 
+        (a.overpaymentAmount > 0) || 
+        (a.originalPrice && Number(a.originalPrice) > Number(a.price))
+      );
+
+      if (changeAppt) {
+        const changeAmt = changeAppt.overpaymentAmount || (Number(changeAppt.originalPrice) - Number(changeAppt.price));
+        const isHandedOver = Boolean(changeAppt.shopRefundHandedOver);
+
+        return {
+          text: isHandedOver
+            ? `✅ **Yes** — **${custName}**'s **${changeAmt} ETB** cash change has already been **Handed Over ✓** at the shop (marked returned by staff).`
+            : `❌ **No** — **${custName}** has not received his **${changeAmt} ETB** cash change yet (Status: **Pending Return ❌**). Please remember to hand him **${changeAmt} ETB in cash** when he arrives for his haircut at the front desk.`,
+          cardType: 'booking_card',
+          cardData: changeAppt,
+          suggestions: [
+            { label: "View Appointment", prompt: `Show me ${custName}` },
+            { label: "Was payment verified?", prompt: `Was ${custName}'s payment verified?` }
+          ]
+        };
+      }
+
+      const currentAppt = resolvedCustomer.activeAppointments?.[0] || resolvedCustomer.latestAppointment;
+      return {
+        text: `ℹ️ **${custName}** does not have any cash change due. He booked **${currentAppt?.serviceName || 'Service'}** (${currentAppt?.price || 0} ETB · ${currentAppt?.paymentStatus || 'Confirmed'}).`,
+        cardType: 'booking_card',
+        cardData: currentAppt,
+        suggestions: [
+          { label: "Appointment Details", prompt: `Show me ${custName}` },
+          { label: "Who is owed change?", prompt: "who is still owed change?" }
+        ]
+      };
+    }
+
+    // B. General Cash Change List (e.g. "who is still owed change?", "who needs change?", "unreturned change list")
+    if (q.includes('who') || q.includes('list') || q.includes('pending') || q.includes('still') || q.includes('owe') || q.includes('status') || q === 'change' || q === 'cash change') {
+      const pendingChangeList = allAppts.filter(a =>
+        (a.adjustmentType === 'downgrade_refund_at_shop' || (a.overpaymentAmount > 0) || (a.originalPrice && Number(a.originalPrice) > Number(a.price))) &&
+        !a.shopRefundHandedOver
+      );
+
+      if (pendingChangeList.length === 0) {
+        return {
+          text: `✅ There are currently **0 customers waiting for cash change**. All change from service downgrades has been handed over!`,
+          cardType: 'appointments_list',
+          cardData: [],
+          suggestions: [
+            { label: "Today's Schedule", prompt: "today appointment?" },
+            { label: "Pending Verification", prompt: "who needs review?" }
+          ]
+        };
+      }
+
+      const listSummary = pendingChangeList.map(a => {
+        const changeAmt = a.overpaymentAmount || (Number(a.originalPrice) - Number(a.price));
+        return `• **${a.customerName}** — **❌ Return ${changeAmt} ETB Change** (Changed from ${a.originalServiceName} to ${a.serviceName} · Scheduled: ${a.dateStr} at ${a.timeDisplay || a.startTime} · Ref: ${a.ref || a.bookingReference})`;
+      }).join('\n');
+
+      return {
+        text: `💵 Found **${pendingChangeList.length}** customer${pendingChangeList.length === 1 ? '' : 's'} with **unreturned cash change waiting at the shop**:\n\n${listSummary}\n\n*In the admin dashboard, click the red "❌ Return Change" button on each order once you hand them the cash!*`,
+        cardType: 'appointments_list',
+        cardData: pendingChangeList,
+        suggestions: [
+          { label: "Today's Schedule", prompt: "today appointment?" },
+          { label: "Pending Verification", prompt: "who needs review?" }
+        ]
+      };
+    }
+  }
+
   // ── [PRIORITY 5] CANCELLATION & REFUND LIFECYCLE INTENT ────────────────
   const isCancellationKeyword = (
     q.includes('cancel') || 
@@ -2002,6 +2575,7 @@ export function processStaffQuery(rawQuery, referenceDate = null) {
     q.includes('refund') || 
     q.includes('refundd') || 
     q.includes('refnd') || 
+    q.includes('credit') || 
     (resolvedCustomer && (q.includes('did he cancel') || q.includes('did she cancel') || q.includes('was his refund') || q.includes('is his refund') || q.includes('refund status') || q === 'refund?' || q === 'refund'))
   );
 
@@ -2046,16 +2620,58 @@ export function processStaffQuery(rawQuery, referenceDate = null) {
       };
     }
 
-    // B. Refund Pending Query (e.g. "Who is waiting for a refund?" / "Who needs a refund?")
-    if (q.includes('pending') || q.includes('waiting') || q.includes('need') || q.includes('needs')) {
+    // B.1. Refund or Credit Due Query (e.g. "Who has a refund or credit due?", "who has credit", "credit due")
+    if (q.includes('credit') || q.includes('refund or credit') || (q.includes('who') && (q.includes('refund') || q.includes('credit')))) {
+      const allAppts = getAuthoritativeAppointments();
+      const creditDueList = allAppts.filter(a => 
+        a.adjustmentType === 'refund_or_credit' || 
+        a.refundStatus === 'Pending' || 
+        ((a.status?.includes('Cancelled') || a.bookingStatus?.includes('Cancelled')) && a.refundStatus !== 'Completed')
+      );
+
+      if (creditDueList.length === 0) {
+        return {
+          text: `✅ There are currently **0 customers** with a refund or credit due.`,
+          cardType: 'appointments_list',
+          cardData: [],
+          suggestions: [
+            { label: "Today's Schedule", prompt: "today appointment?" },
+            { label: "Today's Revenue", prompt: "How much did we make today?" }
+          ]
+        };
+      }
+
+      const listSummary = creditDueList.map(a => {
+        if (a.adjustmentType === 'refund_or_credit') {
+          return `• **${a.customerName}** — **${a.adjustmentAmount} ETB credit/refund due** (changed service from ${a.originalServiceName} to ${a.serviceName} · Ref: ${a.ref || a.bookingReference})`;
+        }
+        return `• **${a.customerName}** — **${a.price} ETB refund pending** (cancelled ${a.serviceName} · Ref: ${a.ref || a.bookingReference})`;
+      }).join('\n');
+
+      return {
+        text: `💚 Found **${creditDueList.length}** customer${creditDueList.length === 1 ? '' : 's'} with a **refund or credit due**:\n\n${listSummary}`,
+        cardType: 'appointments_list',
+        cardData: creditDueList,
+        suggestions: [
+          { label: "Today's Schedule", prompt: "today appointment?" },
+          { label: "Today's Revenue", prompt: "How much did we make today?" }
+        ]
+      };
+    }
+
+    // B.2. Refund Pending / Refund Requested Query (e.g. "Who is waiting for a refund?", "Who requested a refund?", "pending refunds", "refund requests")
+    if (q.includes('request') || q.includes('pending') || q.includes('waiting') || q.includes('need') || q.includes('needs')) {
       const allAppts = getAuthoritativeAppointments();
       const pendingRefunds = allAppts.filter(a => 
-        (a.refundStatus === 'Pending' || ((a.status?.includes('Cancelled') || a.bookingStatus?.includes('Cancelled')) && a.refundStatus !== 'Completed'))
+        a.refundStatus === 'Refund Requested' ||
+        a.refundStatus === 'Pending' || 
+        ((a.status?.includes('Cancelled') || a.bookingStatus?.includes('Cancelled')) && a.refundStatus !== 'Completed' && a.refundStatus !== 'Refund Completed') ||
+        (Number(a.refundAmount) > 0 && a.refundStatus !== 'Refund Completed' && a.refundStatus !== 'Completed')
       );
 
       if (pendingRefunds.length === 0) {
         return {
-          text: `✅ There are currently **0 pending refunds** requiring staff action.`,
+          text: `✅ There are currently **0 pending refund requests** requiring staff action.`,
           cardType: 'appointments_list',
           cardData: [],
           suggestions: [
@@ -2065,14 +2681,62 @@ export function processStaffQuery(rawQuery, referenceDate = null) {
         };
       }
 
-      const listSummary = pendingRefunds.map(a => `• **${a.customerName}** — ${a.serviceName} (${a.price} ETB via ${a.paymentMethod?.toUpperCase()} · ${a.ref || a.bookingReference})`).join('\n');
+      const listSummary = pendingRefunds.map(a => {
+        const dest = a.refundAccount ? ` to **${(a.refundMethod || 'telebirr').toUpperCase()}**: \`${a.refundAccount}\`` : '';
+        const amt = a.refundAmount ? `${a.refundAmount} ETB (75%)` : `${a.price} ETB`;
+        return `• **${a.customerName}** — Refund: **${amt}**${dest} (${a.serviceName} · Ref: ${a.ref || a.bookingReference})`;
+      }).join('\n');
+
       return {
-        text: `⏳ Found **${pendingRefunds.length}** cancelled appointment${pendingRefunds.length === 1 ? '' : 's'} **waiting for refund**:\n\n${listSummary}`,
+        text: `⏳ Found **${pendingRefunds.length}** appointment${pendingRefunds.length === 1 ? '' : 's'} with **pending refund requests**:\n\n${listSummary}`,
         cardType: 'appointments_list',
         cardData: pendingRefunds,
         suggestions: [
           { label: "Completed Refunds", prompt: "Which refunds were completed?" },
           { label: "Today's Schedule", prompt: "today appointment?" }
+        ]
+      };
+    }
+
+    // B.3. Additional Receipts Waiting for Review Query (e.g. "Who submitted additional receipt?", "additional receipts", "additional payments waiting")
+    if (
+      q.includes('additional receipt') ||
+      q.includes('additional receipts') ||
+      q.includes('additional payment') ||
+      q.includes('extra receipt') ||
+      q.includes('receipt waiting') ||
+      q.includes('receipts waiting') ||
+      (q.includes('who') && q.includes('additional'))
+    ) {
+      const allAppts = getAuthoritativeAppointments();
+      const waitingAdditional = allAppts.filter(a =>
+        a.additionalPaymentStatus === 'Pending Verification' ||
+        (Number(a.additionalSubmittedAmount) > 0 && a.additionalPaymentStatus !== 'Verified')
+      );
+
+      if (waitingAdditional.length === 0) {
+        return {
+          text: `✅ There are currently **0 bookings with additional receipts waiting for review**.`,
+          cardType: 'appointments_list',
+          cardData: [],
+          suggestions: [
+            { label: "Today's Schedule", prompt: "today appointment?" },
+            { label: "Pending Refunds", prompt: "Who requested a refund?" }
+          ]
+        };
+      }
+
+      const listSummary = waitingAdditional.map(a =>
+        `• **${a.customerName}** — **+${a.additionalSubmittedAmount || a.remainingAmount} ETB submitted** (Changed to ${a.serviceName} · Barber: ${a.barberName} · Ref: ${a.ref || a.bookingReference})`
+      ).join('\n');
+
+      return {
+        text: `📑 Found **${waitingAdditional.length}** booking${waitingAdditional.length === 1 ? '' : 's'} with **additional receipts waiting for review**:\n\n${listSummary}`,
+        cardType: 'appointments_list',
+        cardData: waitingAdditional,
+        suggestions: [
+          { label: "Today's Schedule", prompt: "today appointment?" },
+          { label: "Pending Refunds", prompt: "Who requested a refund?" }
         ]
       };
     }
@@ -2209,6 +2873,20 @@ export function processStaffQuery(rawQuery, referenceDate = null) {
       q.includes('what did he book before') ||
       q.includes('previous haircut') ||
       q.includes('previous service') ||
+      q.includes('did he change') ||
+      q.includes('did she change') ||
+      q.includes('original service') ||
+      q.includes('new service') ||
+      q.includes('current service') ||
+      q.includes('how much does he owe') ||
+      q.includes('how much does she owe') ||
+      q.includes('does he owe') ||
+      q.includes('does she owe') ||
+      q.includes('still owe') ||
+      q.includes('how much has he paid') ||
+      q.includes('how much has she paid') ||
+      q.includes('additional payment') ||
+      q.includes('current price') ||
       (q === 'phone' || q === 'phone number' || q === 'number' || q === 'what service' || q === 'which service' || q === 'how much' || q === 'payment' || q === 'payment?' || q === 'paid?' || q === 'verified?' || q === 'who was the barber' || q === 'barber')
     )
   );
@@ -2216,6 +2894,137 @@ export function processStaffQuery(rawQuery, referenceDate = null) {
   if (isCustomerContextFollowUp) {
     const cust = currentStaffContext.activeCustomer;
     const appt = currentStaffContext.activeAppointment || (cust?.latestAppointment) || (cust?.allAppointments?.[0]);
+
+    // Balance / Owed inquiry
+    if (q.includes('owe') || q.includes('owes') || q.includes('additional payment') || q.includes('still owe') || q.includes('balance')) {
+      const custName = appt?.customerName || cust?.customerName || 'The customer';
+      const isVerified = appt?.paymentStatus === 'Verified';
+      const price = appt?.price || 0;
+      const actualPaid = appt?.paidAmount !== undefined ? Number(appt.paidAmount) : (isVerified ? price : 0);
+      const remainingDue = appt?.remainingAmount !== undefined ? Number(appt.remainingAmount) : (isVerified ? 0 : price);
+      const sName = appt?.serviceName || 'Service';
+
+      if (appt?.adjustmentType === 'additional_payment' && remainingDue > 0) {
+        return {
+          text: `💳 **${custName}** still owes an additional payment of **${remainingDue} ETB** for **${sName}** (New Total: ${price} ETB, already paid: ${actualPaid} ETB).`,
+          cardType: 'booking_card',
+          cardData: appt,
+          suggestions: [
+            { label: "Did he change service?", prompt: "Did he change his service?" },
+            { label: "Verify Payment", prompt: "Was his payment verified?" }
+          ]
+        };
+      } else if (appt?.adjustmentType === 'downgrade_refund_at_shop' || (appt?.overpaymentAmount > 0) || (appt?.originalPrice && Number(appt.originalPrice) > Number(appt.price))) {
+        const changeAmt = appt.overpaymentAmount || (Number(appt.originalPrice) - Number(appt.price));
+        const isHandedOver = Boolean(appt.shopRefundHandedOver);
+        return {
+          text: isHandedOver
+            ? `💚 **${custName}** does not owe anything! He changed to a cheaper service: **${sName}** (${price} ETB, down from ${appt.originalPrice || price} ETB), and his **${changeAmt} ETB** cash change was already **Handed Over ✓** at the shop.`
+            : `💚 **${custName}** does not owe anything! He changed to a cheaper service: **${sName}** (${price} ETB, down from ${appt.originalPrice || price} ETB). He is due **${changeAmt} ETB cash change** back in person when he arrives for his haircut (Status: ❌ **Not handed over yet**).`,
+          cardType: 'booking_card',
+          cardData: appt,
+          suggestions: [
+            { label: "Was change returned?", prompt: `Did we return ${custName}'s change?` },
+            { label: "Original Service", prompt: "What was the original service?" }
+          ]
+        };
+      } else if (appt?.adjustmentType === 'refund_or_credit') {
+        return {
+          text: `💚 **${custName}** does not owe anything! He has a **refund/credit of ${appt.adjustmentAmount} ETB** due because he changed from **${appt.originalServiceName}** (${appt.originalPrice} ETB) to **${sName}** (${price} ETB).`,
+          cardType: 'booking_card',
+          cardData: appt,
+          suggestions: [
+            { label: "Original Service", prompt: "What was the original service?" },
+            { label: "Phone Number", prompt: "What is his phone number?" }
+          ]
+        };
+      } else if (isVerified) {
+        return {
+          text: `✅ **${custName}** does not owe anything. His payment of **${price} ETB** for **${sName}** is fully **Verified** ✓.`,
+          cardType: 'booking_card',
+          cardData: appt,
+          suggestions: [
+            { label: "Service Details", prompt: "Which service did he book?" },
+            { label: "Barber Info", prompt: "Who was his barber?" }
+          ]
+        };
+      } else {
+        return {
+          text: `⏳ **${custName}**'s payment of **${price} ETB** for **${sName}** is currently **Verification Pending** (owes ${price} ETB).`,
+          cardType: 'booking_card',
+          cardData: appt,
+          suggestions: [
+            { label: "Verify Payment", prompt: "Was his payment verified?" },
+            { label: "Phone Number", prompt: "What is his phone number?" }
+          ]
+        };
+      }
+    }
+
+    // Service change / Original service / Current service inquiry
+    if (q.includes('change') || q.includes('original') || q.includes('new service') || q.includes('current service')) {
+      const custName = appt?.customerName || cust?.customerName || 'The customer';
+      const sName = appt?.serviceName || 'Service';
+      const price = appt?.price || 0;
+
+      if (q.includes('original')) {
+        const origName = appt?.originalServiceName || sName;
+        const origPrice = appt?.originalPrice !== undefined ? appt.originalPrice : price;
+        const responseText = (origName !== sName)
+          ? `✂️ The original service booked by **${custName}** was **${origName}** (${origPrice} ETB). It was updated to **${sName}** (${price} ETB).`
+          : `✂️ **${custName}**'s original service is **${sName}** (${price} ETB).`;
+        return {
+          text: responseText,
+          cardType: 'booking_card',
+          cardData: appt,
+          suggestions: [
+            { label: "Current Service", prompt: "What is the new service?" },
+            { label: "How much does he owe?", prompt: "How much does he still owe?" }
+          ]
+        };
+      }
+
+      if (q.includes('new service') || q.includes('current service')) {
+        return {
+          text: `✂️ The current service for **${custName}** is **${sName}** (${price} ETB).`,
+          cardType: 'booking_card',
+          cardData: appt,
+          suggestions: [
+            { label: "Original Service", prompt: "What was the original service?" },
+            { label: "How much does he owe?", prompt: "How much does he still owe?" }
+          ]
+        };
+      }
+
+      const hasChanged = Boolean(appt?.originalServiceName && appt.originalServiceName !== sName) || (appt?.adjustmentType && appt.adjustmentType !== 'none');
+      if (hasChanged) {
+        let changeDetails = '';
+        if (appt.adjustmentType === 'additional_payment') {
+          changeDetails = ` An additional payment of **${appt.remainingAmount} ETB** is required.`;
+        } else if (appt.adjustmentType === 'refund_or_credit') {
+          changeDetails = ` He has a refund/credit of **${appt.adjustmentAmount} ETB** due.`;
+        }
+        return {
+          text: `✂️ **Yes** — **${custName}** changed his service from **${appt.originalServiceName || 'original'}** (${appt.originalPrice} ETB) to **${sName}** (${price} ETB).${changeDetails}`,
+          cardType: 'booking_card',
+          cardData: appt,
+          suggestions: [
+            { label: "How much does he owe?", prompt: "How much does he still owe?" },
+            { label: "Was payment verified?", prompt: "Was his payment verified?" }
+          ]
+        };
+      } else {
+        return {
+          text: `No — **${custName}** has not changed his service. He is scheduled for **${sName}** (${price} ETB).`,
+          cardType: 'booking_card',
+          cardData: appt,
+          suggestions: [
+            { label: "Service Details", prompt: "Which service did he book?" },
+            { label: "Was payment verified?", prompt: "Was his payment verified?" }
+          ]
+        };
+      }
+    }
 
     // Who was he / customer identity inquiry
     if (q.includes('who was he') || q.includes('who was that') || q.includes('who is he') || q.includes('who came')) {
@@ -2392,11 +3201,18 @@ export function processStaffQuery(rawQuery, referenceDate = null) {
     q.includes('weekly revenue') ||
     q.includes('monthly revenue') ||
     q.includes('shop income') ||
-    q.includes('business income') ||
     q.includes('pending verification') ||
     q.includes('pending payments') ||
     q.includes('pending payment') ||
-    q.includes('unverified')
+    q.includes('unverified') ||
+    q.includes('verified payment') ||
+    q.includes('verified payments') ||
+    q.includes('who has verified') ||
+    q.includes('which verified') ||
+    q.includes('who is verified') ||
+    q.includes('who are verified') ||
+    q.includes('payment verification') ||
+    q.includes('verify payment')
   );
 
   const isBriefingKeyword = (
@@ -2594,6 +3410,7 @@ export function processStaffQuery(rawQuery, referenceDate = null) {
   // ── [PRIORITY 8] DATE + FINANCIAL / PAYMENT / REVENUE INTENT ──────────
   const isFinancialQuery = (
     !isCustomerContextFollowUp &&
+    !isExplicitCustomerMatch &&
     (
       isFinancialKeyword ||
       (currentStaffContext.activeMetric === 'revenue' && 
@@ -2614,11 +3431,60 @@ export function processStaffQuery(rawQuery, referenceDate = null) {
     currentStaffContext.activeTimePeriod = period;
     currentStaffContext.activeMetric = 'revenue';
 
-    const stats = calculateStaffMetrics(period, null, refDate);
+    const stats = calculateStaffMetrics(period, appointmentsList, refDate);
+
+    // Verified payment filter query (e.g. "who has verified payment?", "which payments are verified?", "who is verified?")
+    const isVerifiedFilterQuery = (q.includes('verified') && !q.includes('pending') && !q.includes('unverified')) || q.includes('who is verified') || q.includes('who has verified') || q.includes('which verified');
+    if (isVerifiedFilterQuery) {
+      const verifiedList = stats.appointments.filter(a => {
+        const details = getPaymentVerificationDetails(a);
+        return details.isFullyVerified;
+      });
+      const pendingList = stats.appointments.filter(a => {
+        const details = getPaymentVerificationDetails(a);
+        return !details.isFullyVerified && !a.status?.includes('Cancelled');
+      });
+
+      if (verifiedList.length === 0) {
+        return {
+          text: `💳 **0 verified payments** found for ${periodLabel}. All ${pendingList.length} scheduled bookings have payments awaiting verification.`,
+          cardType: 'appointments_list',
+          cardData: [],
+          suggestions: [
+            { label: "View Pending Payments", prompt: "Which appointments are still pending verification?" },
+            { label: "Today's Schedule", prompt: "today appointment?" }
+          ]
+        };
+      }
+
+      const verifiedSummary = verifiedList.map(a => {
+        const details = getPaymentVerificationDetails(a);
+        return `• **${a.timeDisplay || a.startTime || 'Time'}** — **${a.customerName}** — ${a.serviceName} (**${details.price} ETB** · Verified ✓ via ${details.paymentMethod})`;
+      }).join('\n');
+
+      let text = `✅ **Verified Payments (${periodLabel}) — ${verifiedList.length} booking${verifiedList.length === 1 ? '' : 's'}**:\n\n${verifiedSummary}`;
+      if (pendingList.length > 0) {
+        text += `\n\n⏳ **Note**: There are still **${pendingList.length}** booking${pendingList.length === 1 ? '' : 's'} with payment verification pending (**${stats.pendingRevenue.toLocaleString()} ETB** pending).`;
+      }
+
+      return {
+        text,
+        cardType: 'appointments_list',
+        cardData: verifiedList,
+        suggestions: [
+          { label: "Pending Payments", prompt: "Which appointments are still pending verification?" },
+          { label: "Today's Revenue", prompt: "How much did we make today?" }
+        ]
+      };
+    }
 
     // Pending payment filter query
     if (q.includes('pending') || q.includes('unverified')) {
-      const pendingList = stats.appointments.filter(a => a.paymentStatus !== 'Verified' && !a.status?.includes('Cancelled'));
+      const pendingList = stats.appointments.filter(a => {
+        const details = getPaymentVerificationDetails(a);
+        return !details.isFullyVerified && !a.status?.includes('Cancelled');
+      });
+
       if (pendingList.length === 0) {
         return {
           text: `✅ All payment receipts for ${periodLabel} are verified (0 pending).`,
@@ -2630,7 +3496,19 @@ export function processStaffQuery(rawQuery, referenceDate = null) {
           ]
         };
       }
-      const listSummary = pendingList.map(a => `• **${a.timeDisplay || a.startTime || 'Time'}** — **${a.customerName}** — ${a.serviceName} (${a.price} ETB · ${a.paymentMethod?.toUpperCase() || 'Direct'})`).join('\n');
+      const listSummary = pendingList.map(a => {
+        const details = getPaymentVerificationDetails(a);
+        let note = `${details.price} ETB`;
+        if (details.isUpgraded) {
+          if (!details.isOrigVerified && details.isAddSubmitted) {
+            note = `${details.price} ETB Total [UNVERIFIED: ${details.actualPaid} ETB Paid, +${details.addPrice} ETB Submitted, +${details.remainingDue} ETB Due]`;
+          } else if (details.isOrigVerified && details.isAddSubmitted) {
+            note = `${details.price} ETB Total [Original Verified: ${details.origPrice} ETB, Additional Pending: +${details.addPrice} ETB]`;
+          }
+        }
+        return `• **${a.timeDisplay || a.startTime || 'Time'}** — **${a.customerName}** — ${a.serviceName} (${note} · ${details.paymentMethod})`;
+      }).join('\n');
+
       return {
         text: `⏳ Found **${pendingList.length}** appointment${pendingList.length === 1 ? '' : 's'} with payment verification pending for ${periodLabel} (**${stats.pendingRevenue.toLocaleString()} ETB** pending):\n\n${listSummary}`,
         cardType: 'appointments_list',
@@ -2756,7 +3634,7 @@ export function processStaffQuery(rawQuery, referenceDate = null) {
 
   // ── [PRIORITY 9] DAILY BRIEFING INTENT ────────────────────────────────
   if (isBriefingKeyword) {
-    const todayStats = calculateStaffMetrics('today', null, refDate);
+    const todayStats = calculateStaffMetrics('today', appointmentsList, refDate);
     currentStaffContext.activeTimePeriod = 'today';
     currentStaffContext.activeMetric = 'briefing';
 
@@ -2781,7 +3659,7 @@ export function processStaffQuery(rawQuery, referenceDate = null) {
     const period = timeframe.period || 'this_month';
     const periodLabel = timeframe.label || 'this month';
 
-    const stats = calculateStaffMetrics(period, null, refDate);
+    const stats = calculateStaffMetrics(period, appointmentsList, refDate);
     const topBarber = stats.busiestBarber;
 
     return {
@@ -2849,12 +3727,12 @@ export function processStaffQuery(rawQuery, referenceDate = null) {
   const refMatch = rawUpper.match(/NHB-?\d{4,6}/);
   if (refMatch) {
     const refCode = refMatch[0].replace('-', '');
-    const allAppts = getAuthoritativeAppointments();
+    const allAppts = getAuthoritativeAppointments(appointmentsList);
     const appt = allAppts.find(a => (a.ref || a.bookingReference || '').replace(/[^a-zA-Z0-9]/g, '').toUpperCase().includes(refCode));
 
     if (appt) {
       currentStaffContext.activeAppointment = appt;
-      const matchedProfiles = findCustomerProfiles(appt.customerName || appt.customerPhone);
+      const matchedProfiles = findCustomerProfiles(appt.customerName || appt.customerPhone, appointmentsList);
       if (matchedProfiles.length > 0) currentStaffContext.activeCustomer = matchedProfiles[0];
 
       return {
@@ -2872,7 +3750,7 @@ export function processStaffQuery(rawQuery, referenceDate = null) {
   // ── [PRIORITY 14] PHONE NUMBER LOOKUP INTENT ─────────────────────────
   const digitsOnly = query.replace(/\D/g, '');
   if (digitsOnly.length >= 7) {
-    const matchedProfiles = findCustomerProfiles(digitsOnly);
+    const matchedProfiles = findCustomerProfiles(digitsOnly, appointmentsList);
     if (matchedProfiles.length >= 1) {
       const cust = matchedProfiles[0];
       currentStaffContext.activeCustomer = cust;
@@ -2893,7 +3771,7 @@ export function processStaffQuery(rawQuery, referenceDate = null) {
 
   // ── [PRIORITY 15] EXPLICIT CUSTOMER NAME SEARCH ──────────────────────
   if (candidateName && candidateName.length > 0) {
-    const matchedProfiles = matchedCustomerProfiles.length > 0 ? matchedCustomerProfiles : findCustomerProfiles(candidateName);
+    const matchedProfiles = matchedCustomerProfiles.length > 0 ? matchedCustomerProfiles : findCustomerProfiles(candidateName, appointmentsList);
 
     if (matchedProfiles.length === 1) {
       const cust = matchedProfiles[0];
@@ -2902,9 +3780,23 @@ export function processStaffQuery(rawQuery, referenceDate = null) {
       currentStaffContext.activeAppointment = latest;
       const dateStr = latest ? (formatAppointmentRelativeDate(latest.dateStr) || latest.dateStr) : 'N/A';
 
+      const details = getPaymentVerificationDetails(latest);
+      const isUpgraded = details.isUpgraded;
+      const upgradeNote = isUpgraded ? ` (Upgraded from ${latest?.originalServiceName || 'Original Service'} ${details.origPrice} ETB)` : '';
+      let payNote = `${details.price} ETB · ${details.statusBadge}`;
+      if (details.isFullyVerified) {
+        payNote = `${details.price} ETB · Verified ✓`;
+      } else if (details.isPartiallyVerified) {
+        payNote = `${details.price} ETB Total [Original: ${details.origPrice} ETB Verified, Additional: ${details.addPrice} ETB Pending]`;
+      } else if (details.isUpgraded && !details.isOrigVerified) {
+        payNote = `${details.price} ETB Total [UNVERIFIED: ${details.actualPaid} ETB Paid, +${details.addPrice} ETB Additional Submitted, +${details.remainingDue} ETB Due — Action: Verify All]`;
+      } else {
+        payNote = `${details.price} ETB · Verification Pending`;
+      }
+
       const statusDesc = cust.activeCount > 0 
-        ? `${cust.activeCount} active booking (${latest?.ref || latest?.bookingReference || 'Active'}). **${latest?.serviceName}** with **${latest?.barberName}** on **${dateStr}** (${latest?.price} ETB · ${latest?.paymentStatus} · ${latest?.status})`
-        : `**${cust.totalCount}** recorded appointment${cust.totalCount === 1 ? '' : 's'} (${cust.completedCount} completed, ${cust.cancelledCount} cancelled). Latest: **${latest?.serviceName || 'Hair Cut'}** with **${latest?.barberName || 'Barber'}** on **${dateStr}** (${latest?.paymentStatus || 'Verified'})`;
+        ? `${cust.activeCount} active booking (${latest?.ref || latest?.bookingReference || 'Active'}). **${latest?.serviceName}**${upgradeNote} with **${latest?.barberName}** on **${dateStr}** at **${latest?.timeDisplay || latest?.startTime || 'Scheduled'}** (${payNote} · ${latest?.status})`
+        : `**${cust.totalCount}** recorded appointment${cust.totalCount === 1 ? '' : 's'} (${cust.completedCount} completed, ${cust.cancelledCount} cancelled). Latest: **${latest?.serviceName || 'Hair Cut'}** with **${latest?.barberName || 'Barber'}** on **${dateStr}** (${payNote})`;
 
       return {
         text: `👤 **${cust.customerName}** (${cust.customerPhone}): ${statusDesc}.`,

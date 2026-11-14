@@ -78,7 +78,7 @@ export const MOCK_SERVICES = [
   },
   {
     id: 'srv-6',
-    name: 'Hot Towel Head Shave',
+    name: 'Hot Towel Royal Shave',
     tagline: 'Ultra-smooth clean dome finish',
     category: 'specialty',
     price: 350,

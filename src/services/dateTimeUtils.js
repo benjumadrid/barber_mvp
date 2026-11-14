@@ -456,7 +456,12 @@ export function formatAppointmentDescription(appt, options = {}) {
   const bName = appt.barberName || 'your barber';
   const ref = appt.ref || appt.bookingReference || '';
   const price = appt.price || appt.amountPaid || 0;
-  const payStatus = appt.paymentStatus || 'Verification Pending';
+  let payStatus = appt.paymentStatus || 'Verification Pending';
+  if (appt.adjustmentType === 'additional_payment' && Number(appt.remainingAmount) > 0) {
+    payStatus = `Verified (${appt.paidAmount} ETB paid · +${appt.remainingAmount} ETB due)`;
+  } else if (appt.adjustmentType === 'refund_or_credit' && Number(appt.adjustmentAmount) > 0) {
+    payStatus = `Verified (${appt.paidAmount} ETB paid · ${appt.adjustmentAmount} ETB credit due)`;
+  }
   const apptStatus = appt.status || appt.bookingStatus || 'Confirmed';
 
   const refPrefix = ref ? `**${ref}** ` : '';

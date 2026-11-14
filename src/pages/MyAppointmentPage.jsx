@@ -26,8 +26,10 @@ import {
   Navigation,
   Eye,
   X,
-  CheckCircle2,
-  Phone
+  CheckCircle2, 
+  Phone,
+  UploadCloud,
+  ShieldAlert
 } from 'lucide-react';
 
 import { MOCK_SERVICES } from '../data/servicesData';
@@ -36,6 +38,7 @@ import {
   getMyAppointment, 
   updateAppointment, 
   cancelAppointment,
+  submitAdditionalPaymentReceipt,
   isAppointmentPast,
   isAppointmentActive,
   formatAppointmentRelativeDate,
@@ -56,6 +59,7 @@ import BarberSelector from '../components/booking/BarberSelector';
 import DateSelector from '../components/booking/DateSelector';
 import TimeSlotSelector from '../components/booking/TimeSlotSelector';
 import CancellationModal from '../components/booking/CancellationModal';
+import ReceiptZoomViewer from '../components/common/ReceiptZoomViewer';
 
 export default function MyAppointmentPage() {
   const location = useLocation();
@@ -67,12 +71,22 @@ export default function MyAppointmentPage() {
   const [editError, setEditError] = useState('');
   const [copiedRef, setCopiedRef] = useState(false);
   const [showReceiptModal, setShowReceiptModal] = useState(false);
+  const [activeReceiptTab, setActiveReceiptTab] = useState('original'); // 'original' | 'additional'
 
   // ── Edit draft selections ─────────────────────────────────────
   const [editServiceId, setEditServiceId] = useState(null);
   const [editBarberId, setEditBarberId] = useState(null);
   const [editDate, setEditDate] = useState(null);
   const [editTimeId, setEditTimeId] = useState(null);
+  const [editRefundMethod, setEditRefundMethod] = useState('telebirr');
+  const [editRefundAccount, setEditRefundAccount] = useState('');
+
+  // ── Additional Payment Receipt Upload State ───────────────────
+  const [showAdditionalReceiptModal, setShowAdditionalReceiptModal] = useState(false);
+  const [additionalReceiptFile, setAdditionalReceiptFile] = useState(null);
+  const [additionalReceiptPreview, setAdditionalReceiptPreview] = useState(null);
+  const [additionalReceiptError, setAdditionalReceiptError] = useState('');
+  const [isSubmittingAdditional, setIsSubmittingAdditional] = useState(false);
 
   // ── Countdown timer for 11-minute editing window ──────────────
   const [currentTime, setCurrentTime] = useState(Date.now());
@@ -207,6 +221,8 @@ export default function MyAppointmentPage() {
     }
 
     setEditTimeId(appointment.timeId || null);
+    setEditRefundMethod(appointment.refundMethod || 'telebirr');
+    setEditRefundAccount(appointment.refundAccount || '');
     setEditError('');
     setIsEditing(true);
     window.scrollTo({ top: 0, behavior: 'smooth' });
@@ -224,12 +240,20 @@ export default function MyAppointmentPage() {
       return;
     }
 
+    const newService = MOCK_SERVICES.find(s => s.id === editServiceId);
+    const isOriginalVerified = appointment.paymentStatus === 'Verified' || (Number(appointment.paidAmount) > 0);
+    const verifiedPaid = isOriginalVerified 
+      ? (appointment.paidAmount !== undefined ? Number(appointment.paidAmount) : (Number(appointment.price) || 0))
+      : 0;
+    const newPrice = newService?.price || 0;
+    const baselinePrice = appointment.originalPrice || appointment.price || (isOriginalVerified ? verifiedPaid : 400);
+    const priceDiff = newPrice - baselinePrice;
+
     setIsUpdating(true);
     setEditError('');
 
     const newDateStr = formatDateKey(editDate);
     const dateInfo = formatDisplayDate(editDate);
-    const newService = MOCK_SERVICES.find(s => s.id === editServiceId);
     const newBarber = MOCK_BARBERS.find(b => b.id === editBarberId);
     const dateDisplayStr = `${dateInfo.dayName === 'TODAY' ? 'Today' : dateInfo.dayName}, ${dateInfo.month} ${dateInfo.day}, ${dateInfo.year}`;
 
@@ -241,8 +265,9 @@ export default function MyAppointmentPage() {
       dateStr: newDateStr,
       dateDisplay: dateDisplayStr,
       timeId: editTimeId,
-      price: newService?.price || appointment.price,
-      amountPaid: appointment.amountPaid || appointment.price,
+      price: newPrice,
+      refundMethod: null,
+      refundAccount: null,
     };
 
     const res = await updateAppointment(appointment.id || appointment.ref, updatePayload);
@@ -259,13 +284,108 @@ export default function MyAppointmentPage() {
   };
 
   // ── Cancel Appointment ────────────────────────────────────────
-  const handleCancelConfirm = async () => {
+  const handleCancelConfirm = async (refundDetails = {}) => {
     if (appointment) {
-      const cancelled = await cancelAppointment(appointment.id || appointment.ref);
+      const cancelled = await cancelAppointment(appointment.id || appointment.ref, refundDetails);
       setAppointment(cancelled);
     }
     setShowCancelModal(false);
     setIsEditing(false);
+  };
+
+  // ── Additional Payment Receipt Handlers ───────────────────────
+  const handleAdditionalFileSelect = (e) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+    setAdditionalReceiptError('');
+
+    const validTypes = ['image/jpeg', 'image/jpg', 'image/png', 'image/webp'];
+    if (!validTypes.includes(file.type.toLowerCase())) {
+      setAdditionalReceiptError('Please upload an image file (JPG, PNG, or WEBP).');
+      return;
+    }
+
+    if (file.size > 5 * 1024 * 1024) {
+      setAdditionalReceiptError('Image size exceeds 5MB. Please choose a smaller file.');
+      return;
+    }
+
+    setAdditionalReceiptFile(file);
+    const reader = new FileReader();
+    reader.onload = (evt) => {
+      const rawDataUrl = evt.target.result;
+      if (typeof window === 'undefined' || !window.Image) {
+        setAdditionalReceiptPreview(rawDataUrl);
+        return;
+      }
+
+      const img = new Image();
+      img.onload = () => {
+        // Ultra high-definition canvas compression (max 1800px, 0.88 quality) to ensure razor-sharp text
+        // when zooming in to inspect fine numbers/accounts, while maintaining light local storage footprint
+        const maxDimension = 1800;
+        let width = img.width;
+        let height = img.height;
+
+        if (width > maxDimension || height > maxDimension) {
+          if (width > height) {
+            height = Math.round((height * maxDimension) / width);
+            width = maxDimension;
+          } else {
+            width = Math.round((width * maxDimension) / height);
+            height = maxDimension;
+          }
+        }
+
+        try {
+          const canvas = document.createElement('canvas');
+          canvas.width = width;
+          canvas.height = height;
+          const ctx = canvas.getContext('2d');
+          ctx.imageSmoothingEnabled = true;
+          ctx.imageSmoothingQuality = 'high';
+          ctx.drawImage(img, 0, 0, width, height);
+          const compressedDataUrl = canvas.toDataURL('image/jpeg', 0.88);
+          setAdditionalReceiptPreview(compressedDataUrl);
+        } catch (canvasErr) {
+          setAdditionalReceiptPreview(rawDataUrl);
+        }
+      };
+      img.onerror = () => {
+        setAdditionalReceiptPreview(rawDataUrl);
+      };
+      img.src = rawDataUrl;
+    };
+    reader.onerror = () => {
+      setAdditionalReceiptError('Failed to read receipt image file. Please try again.');
+    };
+    reader.readAsDataURL(file);
+  };
+
+  const handleConfirmAdditionalReceipt = async () => {
+    if (!additionalReceiptPreview) {
+      setAdditionalReceiptError('Please select a receipt screenshot first.');
+      return;
+    }
+
+    setIsSubmittingAdditional(true);
+    setAdditionalReceiptError('');
+
+    const res = await submitAdditionalPaymentReceipt(appointment.id || appointment.ref, {
+      receiptPreview: additionalReceiptPreview,
+      receiptFileName: additionalReceiptFile?.name || 'additional_receipt.png',
+      amount: appointment.remainingAmount
+    });
+
+    if (res.success && res.appointment) {
+      setAppointment(res.appointment);
+      setShowAdditionalReceiptModal(false);
+      setAdditionalReceiptFile(null);
+      setAdditionalReceiptPreview(null);
+    } else {
+      setAdditionalReceiptError(res.error || 'Failed to submit additional receipt.');
+    }
+    setIsSubmittingAdditional(false);
   };
 
   // Loading State
@@ -474,7 +594,13 @@ export default function MyAppointmentPage() {
   if (isEditing) {
     const currentService = MOCK_SERVICES.find(s => s.id === (appointment.serviceId || 'srv-1'));
     const newService = MOCK_SERVICES.find(s => s.id === editServiceId);
-    const priceDiff = (newService?.price || 0) - (currentService?.price || 0);
+    
+    const isOriginalVerified = appointment.paymentStatus === 'Verified' || (Number(appointment.paidAmount) > 0);
+    const verifiedPaid = isOriginalVerified 
+      ? (appointment.paidAmount !== undefined ? Number(appointment.paidAmount) : (Number(appointment.price) || 0))
+      : 0;
+    const newPrice = newService?.price || 0;
+    const priceDiff = isOriginalVerified ? (newPrice - verifiedPaid) : 0;
 
     const currentBarber = MOCK_BARBERS.find(b => b.id === (appointment.barberId || appointment.actualBarberId));
     const newBarber = MOCK_BARBERS.find(b => b.id === editBarberId);
@@ -568,7 +694,7 @@ export default function MyAppointmentPage() {
             {/* Price Delta & Summary Comparison */}
             <div className="bg-[#FAF6F1] border border-[#EADBCA] rounded-2xl p-5 space-y-4 text-left">
               <h4 className="text-xs font-bold uppercase tracking-wider text-[#9E8B7F] font-['Cinzel',serif]">
-                Reservation Comparison
+                Reservation & Payment Adjustment
               </h4>
 
               <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
@@ -580,7 +706,9 @@ export default function MyAppointmentPage() {
                   <p className="font-bold text-[#1E1915] text-sm">{currentService?.name}</p>
                   <p className="text-[#6E5D52]">Barber: <span className="font-semibold text-[#1E1915]">{currentBarber?.name}</span></p>
                   <p className="text-[#6E5D52]">{formatAppointmentRelativeDate(appointment.dateStr, currentTime)} • {appointment.timeDisplay}</p>
-                  <p className="text-[#8C4717] font-bold pt-1">{currentService?.price} ETB Paid</p>
+                  <p className="text-[#8C4717] font-bold pt-1">
+                    {isOriginalVerified ? `Already Paid: ${verifiedPaid} ETB` : `Total: ${currentService?.price} ETB (Pending)`}
+                  </p>
                 </div>
 
                 {/* New */}
@@ -592,33 +720,50 @@ export default function MyAppointmentPage() {
                   <p className="text-[#6E5D52]">Barber: <span className="font-semibold text-[#1E1915]">{newBarber?.name || 'Select Barber'}</span></p>
                   <p className="text-[#6E5D52]">{newDateDisplay} • {editTimeId ? `${editTimeId}` : 'Select Time'}</p>
                   <p className="text-[#1E1915] font-extrabold pt-1">
-                    Total: {newService?.price || 0} ETB
+                    New Total: {newPrice} ETB
                   </p>
                 </div>
               </div>
 
               {/* Price adjustment notice */}
-              {priceDiff === 0 ? (
-                <div className="flex items-center gap-2 text-xs text-emerald-800 font-semibold bg-emerald-50 border border-emerald-200 p-3 rounded-xl">
-                  <Check className="w-4 h-4 text-emerald-600 flex-shrink-0" />
-                  <span>No price difference. No additional payment required.</span>
-                </div>
-              ) : priceDiff > 0 ? (
-                <div className="flex items-start gap-2.5 text-xs text-[#8C4717] font-semibold bg-[#FAF4EA] border border-[#EADBCA] p-3.5 rounded-xl">
-                  <Info className="w-4 h-4 text-[#C88A22] flex-shrink-0 mt-0.5" />
-                  <div>
-                    <span className="block font-bold">Additional payment required: +{priceDiff} ETB</span>
-                    <span className="text-[11px] font-normal text-[#6E5D52]">
-                      You can settle the remaining {priceDiff} ETB upon arrival at Lucy Hotel front desk.
+              {priceDiff < 0 ? (
+                <div className="p-4 rounded-2xl bg-emerald-50 border-2 border-emerald-400/80 text-left space-y-2 shadow-xs">
+                  <div className="flex items-center gap-2 text-xs font-black uppercase text-emerald-950 font-['Cinzel',serif] tracking-wide">
+                    <CheckCircle2 className="w-4 h-4 text-emerald-600 flex-shrink-0" />
+                    <span>Service Downgrade — Cash Change Due at Shop</span>
+                  </div>
+                  <p className="text-xs text-emerald-900 leading-relaxed font-medium">
+                    New total: <strong className="text-[#1E1915]">{newPrice} ETB</strong> · Original service: <strong className="text-[#1E1915]">{baselinePrice} ETB</strong> (Price Difference: <strong>{Math.abs(priceDiff)} ETB</strong>).
+                  </p>
+                  <div className="bg-white/95 border border-emerald-300 p-3 rounded-xl text-xs font-bold text-emerald-950 flex items-start gap-2 shadow-xs">
+                    <span className="text-base flex-shrink-0">💵</span>
+                    <span className="leading-snug">
+                      You will receive your <strong>{Math.abs(priceDiff)} ETB</strong> change in cash in person when you go to get your haircut at Nhatty Barber House (Lucy Hotel, Ground Floor).
                     </span>
+                  </div>
+                  <p className="text-[10.5px] text-emerald-700 font-semibold">
+                    * 100% of the price difference is returned to you. The 75% refund policy applies only to cancelled appointments.
+                  </p>
+                </div>
+              ) : priceDiff === 0 ? (
+                <div className="flex items-center gap-2 text-xs text-emerald-800 font-semibold bg-emerald-50 border border-emerald-200 p-3.5 rounded-xl">
+                  <Check className="w-4 h-4 text-emerald-600 flex-shrink-0" />
+                  <div>
+                    <span className="block font-bold">New total: {newPrice} ETB</span>
+                    <span className="text-[11px] font-normal text-emerald-700">Same service price. No additional payment or refund required.</span>
                   </div>
                 </div>
               ) : (
-                <div className="flex items-start gap-2.5 text-xs text-[#5D4A3E] bg-white border border-[#E6DDD1] p-3.5 rounded-xl">
-                  <Info className="w-4 h-4 text-[#9E8B7F] flex-shrink-0 mt-0.5" />
-                  <span>
-                    Your appointment has been updated. Any adjustments will be handled seamlessly at the front desk.
-                  </span>
+                <div className="flex items-start gap-2.5 text-xs text-[#8C4717] font-semibold bg-[#FAF4EA] border border-[#EADBCA] p-3.5 rounded-xl">
+                  <Info className="w-4 h-4 text-[#C88A22] flex-shrink-0 mt-0.5" />
+                  <div>
+                    <span className="block font-bold text-sm text-[#1E1915]">New total: {newPrice} ETB</span>
+                    <span className="block text-[#6E5D52] mt-0.5">Original service: {baselinePrice} ETB</span>
+                    <span className="block font-extrabold text-[#C88A22] mt-1">Additional payment required: +{priceDiff} ETB</span>
+                    <span className="text-[11px] font-normal text-[#6E5D52] mt-0.5 block">
+                      Your original payment is preserved. Settle the remaining {priceDiff} ETB at Lucy Hotel front desk.
+                    </span>
+                  </div>
                 </div>
               )}
             </div>
@@ -823,6 +968,11 @@ export default function MyAppointmentPage() {
                 <p className="text-[11px] text-[#6E5D52] font-semibold">
                   60-Minute Master Grooming
                 </p>
+                {appointment.originalServiceName && appointment.originalServiceName !== appointment.serviceName && (
+                  <p className="text-[10px] text-[#8C4717] font-semibold bg-[#FAF2E3] px-2 py-0.5 rounded border border-[#E5A93C]/30 inline-block mt-0.5">
+                    Changed from: {appointment.originalServiceName} ({appointment.originalPrice} ETB)
+                  </p>
+                )}
               </div>
 
               {/* Master Barber Box */}
@@ -917,10 +1067,13 @@ export default function MyAppointmentPage() {
               </div>
 
               <div className="flex items-center gap-3 self-end sm:self-auto">
-                {appointment.receiptPreview && (
+                {(appointment.receiptPreview || appointment.originalReceiptPreview || appointment.additionalReceiptPreview) && (
                   <button
                     type="button"
-                    onClick={() => setShowReceiptModal(true)}
+                    onClick={() => {
+                      setActiveReceiptTab(appointment.additionalReceiptPreview && !appointment.receiptPreview && !appointment.originalReceiptPreview ? 'additional' : 'original');
+                      setShowReceiptModal(true);
+                    }}
                     className="inline-flex items-center gap-1 text-xs font-bold text-[#8C4717] bg-white border border-[#EADBCA] px-3 py-1.5 rounded-xl hover:bg-[#FAF4EA] transition-colors cursor-pointer shadow-xs"
                   >
                     <Eye className="w-3.5 h-3.5 text-[#C88A22]" />
@@ -928,16 +1081,197 @@ export default function MyAppointmentPage() {
                   </button>
                 )}
 
-                <div className="text-right">
-                  <span className="text-[10px] font-bold uppercase tracking-wider text-[#9E8B7F] block">
-                    Total Paid
-                  </span>
-                  <p className="text-lg font-black text-[#1E1915]">
-                    {appointment.price || appointment.amountPaid} <span className="text-xs font-bold text-[#8C4717]">ETB</span>
-                  </p>
-                </div>
+                {(() => {
+                  const isEditedAppt = Boolean(
+                    appointment.isEdited ||
+                    (appointment.originalServiceId && appointment.serviceId && appointment.originalServiceId !== appointment.serviceId) ||
+                    (appointment.originalPrice !== undefined && Number(appointment.originalPrice) !== Number(appointment.price))
+                  );
+                  const isUpgradeWithBalanceDue = Boolean(
+                    !isPast &&
+                    isEditedAppt &&
+                    appointment.adjustmentType === 'additional_payment' &&
+                    Number(appointment.remainingAmount) > 0
+                  );
+                  const isDowngraded = Boolean(
+                    appointment.adjustmentType === 'downgrade_refund_at_shop' ||
+                    (appointment.overpaymentAmount > 0) ||
+                    (appointment.originalPrice && Number(appointment.originalPrice) > Number(appointment.price))
+                  );
+                  const overpayChange = appointment.overpaymentAmount || (Number(appointment.originalPrice) - Number(appointment.price)) || 0;
+                  const receiptSubmitted = appointment.submittedAmount || appointment.originalSubmittedAmount || appointment.originalPrice || appointment.price;
+
+                  return (
+                    <div className="text-right">
+                      <span className="text-[10px] font-bold uppercase tracking-wider text-[#9E8B7F] block">
+                        {isUpgradeWithBalanceDue ? 'Total Price' : (isDowngraded ? 'Service Price' : (appointment.paymentStatus === 'Verified' ? 'Total Paid' : 'Total Amount'))}
+                      </span>
+                      <p className="text-lg font-black text-[#1E1915]">
+                        {appointment.price} <span className="text-xs font-bold text-[#8C4717]">ETB</span>
+                      </p>
+                      <div className="text-[10.5px] font-bold text-[#8C4717] mt-0.5">
+                        {isUpgradeWithBalanceDue ? (
+                          <>
+                            <span>Verified Paid: {appointment.paidAmount || 0} ETB</span>
+                            <span className="text-amber-800 font-extrabold block sm:inline sm:ml-1">
+                              • +{appointment.remainingAmount} ETB Due
+                            </span>
+                          </>
+                        ) : isDowngraded && overpayChange > 0 ? (
+                          <div className="text-[10.5px] font-bold text-emerald-800 mt-0.5">
+                            <span className="block text-[#6E5D52]">Receipt: {receiptSubmitted} ETB</span>
+                            <span className="text-emerald-700 font-extrabold block">
+                              {appointment.shopRefundHandedOver 
+                                ? `✓ +${overpayChange} ETB Change Collected` 
+                                : `💵 +${overpayChange} ETB Change at Shop`}
+                            </span>
+                          </div>
+                        ) : appointment.refundAmount > 0 ? (
+                          <div className="text-[10px] font-bold text-emerald-700 mt-0.5">
+                            <span>75% Refund Due: {appointment.refundAmount} ETB</span>
+                            <span className="text-slate-500 block text-[9.5px]">({appointment.refundStatus})</span>
+                          </div>
+                        ) : (
+                          <span>
+                            {appointment.paymentStatus === 'Verified' 
+                              ? `Paid: ${appointment.price} ETB (Verified)` 
+                              : `Submitted: ${appointment.price} ETB (Verification Pending)`}
+                          </span>
+                        )}
+                      </div>
+                    </div>
+                  );
+                })()}
               </div>
             </div>
+
+            {/* Additional Payment Requirement Card — Strictly for Genuine Upgrades with Remaining Balance */}
+            {(() => {
+              const isEditedAppt = Boolean(
+                appointment.isEdited ||
+                (appointment.originalServiceId && appointment.serviceId && appointment.originalServiceId !== appointment.serviceId) ||
+                (appointment.originalPrice !== undefined && Number(appointment.originalPrice) !== Number(appointment.price))
+              );
+              const isUpgradeWithBalanceDue = Boolean(
+                !isPast &&
+                isEditedAppt &&
+                appointment.adjustmentType === 'additional_payment' &&
+                Number(appointment.remainingAmount) > 0
+              );
+
+              if (!isUpgradeWithBalanceDue) return null;
+
+              return (
+                <div className="p-4 rounded-2xl bg-[#FAF2E3] border-2 border-[#E5A93C]/70 text-left space-y-2 shadow-xs">
+                  <div className="flex items-start justify-between gap-3 flex-wrap">
+                    <div className="space-y-0.5 min-w-0 flex-1">
+                      <div className="flex items-center gap-1.5 text-xs font-black uppercase text-[#8C4717] font-['Cinzel',serif] tracking-wide">
+                        <CreditCard className="w-4 h-4 text-[#C88A22]" />
+                        <span>Service Upgrade — Additional Payment Due</span>
+                      </div>
+                      <p className="text-xs text-[#6E5D52] leading-relaxed">
+                        You upgraded your appointment to <strong className="text-[#1E1915]">{appointment.serviceName}</strong> ({appointment.price} ETB).
+                        Your previous payment for <strong className="text-[#1E1915]">{appointment.originalServiceName || 'original service'}</strong> ({appointment.originalPrice || 0} ETB) is registered.
+                      </p>
+                      <p className="text-sm font-black text-[#1E1915] font-mono pt-0.5">
+                        Remaining Balance Due: <span className="text-amber-900 text-base">{appointment.remainingAmount} ETB</span>
+                      </p>
+                    </div>
+
+                    <div className="self-end sm:self-center">
+                      {appointment.additionalPaymentStatus === 'Pending Verification' ? (
+                        <div className="flex items-center gap-2 flex-wrap justify-end">
+                          <div className="bg-amber-100/90 border border-amber-300 text-amber-900 px-3 py-1.5 rounded-xl text-xs font-bold flex items-center gap-1.5 shadow-xs">
+                            <Clock className="w-4 h-4 text-amber-800 animate-pulse flex-shrink-0" />
+                            <div>
+                              <span className="block text-[11px] font-extrabold">Additional Receipt Submitted</span>
+                              <span className="text-[10px] font-normal text-amber-800">Verification Pending by Staff</span>
+                            </div>
+                          </div>
+                          {appointment.additionalReceiptPreview && (
+                            <button
+                              type="button"
+                              onClick={() => {
+                                setActiveReceiptTab('additional');
+                                setShowReceiptModal(true);
+                              }}
+                              className="inline-flex items-center gap-1 text-xs font-bold text-amber-950 bg-white border border-amber-300 px-3 py-1.5 rounded-xl hover:bg-amber-50 transition-colors cursor-pointer shadow-xs"
+                              title="Inspect attached additional receipt"
+                            >
+                              <Eye className="w-3.5 h-3.5 text-[#C88A22]" />
+                              <span>View Receipt</span>
+                            </button>
+                          )}
+                        </div>
+                      ) : (
+                        <button
+                          type="button"
+                          onClick={() => setShowAdditionalReceiptModal(true)}
+                          className="inline-flex items-center gap-1.5 px-4 py-2.5 rounded-xl bg-gradient-to-r from-[#E5A93C] via-[#DF9C2F] to-[#D97706] text-[#1A1614] text-xs font-extrabold shadow-md hover:brightness-105 active:scale-95 transition-all cursor-pointer"
+                        >
+                          <UploadCloud className="w-4 h-4 stroke-[2.5]" />
+                          <span>Submit Additional Receipt ({appointment.remainingAmount} ETB)</span>
+                        </button>
+                      )}
+                    </div>
+                  </div>
+                </div>
+              );
+            })()}
+
+            {/* Service Downgrade / Overpayment Cash Return Card */}
+            {(() => {
+              const isDowngraded = Boolean(
+                appointment.adjustmentType === 'downgrade_refund_at_shop' ||
+                (appointment.overpaymentAmount > 0) ||
+                (appointment.originalPrice && Number(appointment.originalPrice) > Number(appointment.price))
+              );
+              const overpayChange = appointment.overpaymentAmount || (Number(appointment.originalPrice) - Number(appointment.price)) || 0;
+              const receiptSubmitted = appointment.submittedAmount || appointment.originalSubmittedAmount || appointment.originalPrice || appointment.price;
+              const isHandedOver = Boolean(appointment.shopRefundHandedOver);
+
+              if (!isDowngraded || isPast || overpayChange <= 0) return null;
+
+              return (
+                <div className={`p-4 rounded-2xl border-2 text-left space-y-2 shadow-xs animate-[fadeIn_0.3s_ease-out] ${
+                  isHandedOver ? 'bg-emerald-50 border-emerald-500/80' : 'bg-emerald-50/70 border-emerald-400/80'
+                }`}>
+                  <div className="flex items-center justify-between gap-2 flex-wrap">
+                    <div className="flex items-center gap-1.5 text-xs font-black uppercase text-emerald-950 font-['Cinzel',serif] tracking-wide">
+                      <CheckCircle2 className="w-4 h-4 text-emerald-600 flex-shrink-0" />
+                      <span>{isHandedOver ? 'Cash Change Collected at Front Desk' : 'Service Adjustment — Cash Change Due at Shop'}</span>
+                    </div>
+                    <span className={`text-[10px] font-mono font-black px-2 py-0.5 rounded-full uppercase tracking-wider ${
+                      isHandedOver ? 'bg-emerald-200 text-emerald-950 border border-emerald-400' : 'bg-amber-100 text-amber-900 border border-amber-300'
+                    }`}>
+                      {isHandedOver ? '✓ Collected at Shop' : '💵 Due Upon Arrival'}
+                    </span>
+                  </div>
+                  <p className="text-xs text-emerald-900 leading-relaxed font-semibold">
+                    You changed your service to <strong className="text-[#1E1915]">{appointment.serviceName}</strong> ({appointment.price} ETB).
+                    Your payment receipt for <strong className="text-[#1E1915]">{appointment.originalServiceName || 'original service'}</strong> ({receiptSubmitted} ETB) leaves an overpayment of <strong className="text-emerald-950 font-mono font-black">{overpayChange} ETB</strong>.
+                  </p>
+                  {isHandedOver ? (
+                    <div className="bg-white/95 border border-emerald-400 p-3 rounded-xl text-xs font-bold text-emerald-950 flex items-start gap-2 shadow-xs">
+                      <CheckCircle2 className="w-4 h-4 text-emerald-600 flex-shrink-0 mt-0.5" />
+                      <span className="leading-snug">
+                        Your <strong>{overpayChange} ETB</strong> change was successfully handed over in cash at Nhatty Barber House front desk.
+                      </span>
+                    </div>
+                  ) : (
+                    <div className="bg-white/95 border border-emerald-300 p-3 rounded-xl text-xs font-bold text-emerald-950 flex items-start gap-2 shadow-xs">
+                      <span className="text-base flex-shrink-0">💵</span>
+                      <span className="leading-snug">
+                        You will receive your <strong>{overpayChange} ETB</strong> change in cash in person when you go to get your haircut at Nhatty Barber House (Lucy Hotel, Ground Floor).
+                      </span>
+                    </div>
+                  )}
+                  <p className="text-[10.5px] text-emerald-700 font-semibold">
+                    * No service fee is deducted. 100% of the price difference is returned to you in cash.
+                  </p>
+                </div>
+              );
+            })()}
 
             {/* Check-In Instructions / Completed Session Historical Policy */}
             <div className="p-4 rounded-2xl bg-gradient-to-r from-white via-[#FAF6F1] to-white border border-[#E6DDD1] flex items-start gap-3 text-xs text-[#5D4A3E]">
@@ -1121,16 +1455,17 @@ export default function MyAppointmentPage() {
           isOpen={showCancelModal}
           onKeep={() => setShowCancelModal(false)}
           onCancel={handleCancelConfirm}
+          appointment={appointment}
         />
 
         {/* Receipt Image Lightbox Modal */}
-        {showReceiptModal && appointment.receiptPreview && (
+        {showReceiptModal && (appointment.receiptPreview || appointment.originalReceiptPreview || appointment.additionalReceiptPreview) && (
           <div className="fixed inset-0 z-50 bg-black/80 backdrop-blur-sm flex items-center justify-center p-4 animate-[fadeIn_0.2s_ease-out]">
-            <div className="bg-white rounded-3xl max-w-lg w-full overflow-hidden shadow-2xl border border-[#E6DDD1] p-6 space-y-4 relative">
+            <div className="bg-white rounded-3xl max-w-xl w-full overflow-hidden shadow-2xl border border-[#E6DDD1] p-5 sm:p-6 space-y-4 relative">
               <div className="flex items-center justify-between border-b border-[#EFE9E2] pb-3">
                 <div className="flex items-center gap-2 text-xs font-extrabold text-[#1E1915] uppercase tracking-wider font-['Cinzel',serif]">
                   <FileCheck2 className="w-4 h-4 text-[#C88A22]" />
-                  <span>Attached Payment Receipt</span>
+                  <span>Payment Receipts</span>
                 </div>
                 <button
                   type="button"
@@ -1141,17 +1476,156 @@ export default function MyAppointmentPage() {
                 </button>
               </div>
 
-              <div className="rounded-2xl overflow-hidden border border-[#E6DDD1] bg-black/5 flex items-center justify-center max-h-96">
-                <img
-                  src={appointment.receiptPreview}
-                  alt="Receipt Preview"
-                  className="max-h-96 w-auto object-contain"
-                />
+              {/* Tabs if additional receipt exists */}
+              {(appointment.additionalReceiptPreview || (appointment.additionalSubmittedAmount > 0)) && (
+                <div className="flex items-center gap-2 bg-[#FAF6F1] p-1 rounded-xl border border-[#E6DDD1]">
+                  <button
+                    type="button"
+                    onClick={() => setActiveReceiptTab('original')}
+                    className={`flex-1 py-1.5 px-3 rounded-lg text-xs font-bold transition-all cursor-pointer ${
+                      activeReceiptTab === 'original'
+                        ? 'bg-[#140F0C] text-[#FAF6F1] shadow-xs'
+                        : 'text-[#6E5D52] hover:text-[#1E1915]'
+                    }`}
+                  >
+                    Original Receipt ({appointment.originalPrice || appointment.price} ETB)
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => setActiveReceiptTab('additional')}
+                    className={`flex-1 py-1.5 px-3 rounded-lg text-xs font-bold transition-all cursor-pointer ${
+                      activeReceiptTab === 'additional'
+                        ? 'bg-[#140F0C] text-[#FAF6F1] shadow-xs'
+                        : 'text-[#6E5D52] hover:text-[#1E1915]'
+                    }`}
+                  >
+                    Additional Receipt ({appointment.additionalSubmittedAmount || appointment.remainingAmount} ETB)
+                  </button>
+                </div>
+              )}
+
+              <div className="rounded-2xl overflow-hidden border border-[#E6DDD1] bg-black/5 flex items-center justify-center min-h-[160px]">
+                {activeReceiptTab === 'additional' && appointment.additionalReceiptPreview ? (
+                  <ReceiptZoomViewer
+                    src={appointment.additionalReceiptPreview}
+                    alt="Additional Receipt Preview"
+                    fileName={appointment.additionalReceiptFileName || 'additional_receipt.png'}
+                    theme="light"
+                    maxHeightClass="max-h-[46vh] sm:max-h-[52vh]"
+                  />
+                ) : (
+                  <ReceiptZoomViewer
+                    src={appointment.originalReceiptPreview || appointment.receiptPreview}
+                    alt="Original Receipt Preview"
+                    fileName={appointment.receiptFileName || 'payment_receipt.png'}
+                    theme="light"
+                    maxHeightClass="max-h-[46vh] sm:max-h-[52vh]"
+                  />
+                )}
               </div>
 
-              <p className="text-[11px] text-center text-[#9E8B7F]">
-                Verified against reference <span className="font-mono font-bold text-[#1E1915]">{appointment.ref}</span>
-              </p>
+              <div className="text-center text-[11px] text-[#9E8B7F]">
+                <p>Reference: <span className="font-mono font-bold text-[#1E1915]">{appointment.ref}</span></p>
+                {activeReceiptTab === 'additional' && (
+                  <p className="text-amber-800 font-semibold mt-0.5">Additional Payment Status: {appointment.additionalPaymentStatus}</p>
+                )}
+              </div>
+            </div>
+          </div>
+        )}
+
+        {/* Additional Receipt Upload Modal */}
+        {showAdditionalReceiptModal && (
+          <div className="fixed inset-0 z-50 bg-black/80 backdrop-blur-sm flex items-center justify-center p-4 animate-[fadeIn_0.2s_ease-out]">
+            <div className="bg-white rounded-3xl max-w-md w-full overflow-hidden shadow-2xl border border-[#E6DDD1] p-6 space-y-4 relative text-left">
+              <div className="flex items-center justify-between border-b border-[#EFE9E2] pb-3">
+                <div className="flex items-center gap-2 text-xs font-extrabold text-[#1E1915] uppercase tracking-wider font-['Cinzel',serif]">
+                  <UploadCloud className="w-4 h-4 text-[#C88A22]" />
+                  <span>Submit Additional Receipt</span>
+                </div>
+                <button
+                  type="button"
+                  onClick={() => setShowAdditionalReceiptModal(false)}
+                  className="p-1 rounded-lg text-[#9E8B7F] hover:text-[#1E1915] hover:bg-black/5"
+                >
+                  <X className="w-5 h-5" />
+                </button>
+              </div>
+
+              {/* Service & Remaining Summary */}
+              <div className="bg-[#FAF6F1] border border-[#EADBCA] rounded-2xl p-4 space-y-1.5 text-xs">
+                <div className="flex justify-between">
+                  <span className="text-[#8C7A6D]">Upgraded Service:</span>
+                  <span className="font-bold text-[#1E1915]">{appointment.serviceName}</span>
+                </div>
+                <div className="flex justify-between">
+                  <span className="text-[#8C7A6D]">New Total Price:</span>
+                  <span className="font-bold text-[#1E1915]">{appointment.price} ETB</span>
+                </div>
+                <div className="flex justify-between">
+                  <span className="text-[#8C7A6D]">Already Paid:</span>
+                  <span className="font-bold text-[#1E1915]">{appointment.paidAmount || 0} ETB</span>
+                </div>
+                <div className="flex justify-between pt-1 border-t border-[#EFE9E2] text-sm font-black">
+                  <span className="text-amber-900">Remaining Amount to Pay:</span>
+                  <span className="text-amber-900 font-mono">{appointment.remainingAmount} ETB</span>
+                </div>
+              </div>
+
+              {/* Payment Details */}
+              <div className="space-y-1 text-xs text-[#6E5D52]">
+                <p className="font-bold text-[#1E1915]">Transfer Channels:</p>
+                <p>• Telebirr: <strong className="font-mono text-[#1E1915]">0975 357 881</strong> (Nhatty Barber)</p>
+                <p>• CBE: <strong className="font-mono text-[#1E1915]">1000 1234 56789</strong> (Nhatty Barber House)</p>
+              </div>
+
+              {/* Upload input */}
+              <div className="space-y-2">
+                <label className="block text-xs font-bold text-[#1E1915]">
+                  Upload Additional Payment Screenshot:
+                </label>
+                <input
+                  type="file"
+                  accept="image/*"
+                  onChange={handleAdditionalFileSelect}
+                  className="w-full text-xs text-[#6E5D52] file:mr-3 file:py-2 file:px-4 file:rounded-xl file:border-0 file:text-xs file:font-bold file:bg-[#140F0C] file:text-[#FAF6F1] hover:file:brightness-110 cursor-pointer"
+                />
+
+                {additionalReceiptPreview && (
+                  <div className="mt-2 rounded-xl border border-[#E6DDD1] bg-black/5 p-2 overflow-hidden flex flex-col items-center justify-center">
+                    <ReceiptZoomViewer
+                      src={additionalReceiptPreview}
+                      alt="Additional Receipt Preview"
+                      fileName={additionalReceiptFile?.name || 'additional_receipt.png'}
+                      theme="light"
+                      maxHeightClass="max-h-56"
+                    />
+                  </div>
+                )}
+
+                {additionalReceiptError && (
+                  <p className="text-xs text-red-600 font-semibold">{additionalReceiptError}</p>
+                )}
+              </div>
+
+              {/* Action buttons */}
+              <div className="flex gap-2 pt-2">
+                <button
+                  type="button"
+                  onClick={() => setShowAdditionalReceiptModal(false)}
+                  className="flex-1 py-3 rounded-xl border border-[#E6DDD1] text-xs font-bold text-[#6E5D52] hover:bg-[#FAF6F1]"
+                >
+                  Cancel
+                </button>
+                <button
+                  type="button"
+                  onClick={handleConfirmAdditionalReceipt}
+                  disabled={isSubmittingAdditional || !additionalReceiptPreview}
+                  className="flex-1 py-3 rounded-xl bg-gradient-to-r from-[#E5A93C] via-[#DF9C2F] to-[#D97706] text-[#1A1614] text-xs font-black shadow-md hover:brightness-105 disabled:opacity-50"
+                >
+                  {isSubmittingAdditional ? 'Submitting...' : 'Submit Receipt'}
+                </button>
+              </div>
             </div>
           </div>
         )}

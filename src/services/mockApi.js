@@ -99,6 +99,14 @@ import {
   cancelBooking as storeCancelBooking, 
   updateAppointment as storeUpdateAppointment,
   cancelAppointment as storeCancelAppointment,
+  submitAdditionalPaymentReceipt as storeSubmitAdditionalPaymentReceipt,
+  verifyAdditionalPayment as storeVerifyAdditionalPayment,
+  verifyOriginalPayment as storeVerifyOriginalPayment,
+  revertOriginalPayment as storeRevertOriginalPayment,
+  revertAdditionalPayment as storeRevertAdditionalPayment,
+  verifyAllPayments as storeVerifyAllPayments,
+  updateRefundStatus as storeUpdateRefundStatus,
+  toggleShopRefundStatus as storeToggleShopRefundStatus,
   isSlotBooked as storeIsSlotBooked, 
   getBarberTimeSlots,
   getSlotStatus,
@@ -127,6 +135,9 @@ export {
   subscribeToBookingStore,
   notifyBookingStoreChange,
   loadBookedSlotsFromStorage,
+  storeSubmitAdditionalPaymentReceipt as submitAdditionalPaymentReceiptDirect,
+  storeVerifyAdditionalPayment as verifyAdditionalPaymentDirect,
+  storeUpdateRefundStatus as updateRefundStatusDirect,
 };
 
 /**
@@ -158,7 +169,7 @@ export async function getAppointmentById(id) {
 }
 
 /**
- * Update an existing appointment within the 10-minute window
+ * Update an existing appointment within the 11-minute window
  */
 export async function updateAppointment(appointmentId, updates) {
   await delay(250);
@@ -166,19 +177,27 @@ export async function updateAppointment(appointmentId, updates) {
 }
 
 /**
+ * Submit additional payment receipt for service upgrade
+ */
+export async function submitAdditionalPaymentReceipt(appointmentId, receiptData) {
+  await delay(200);
+  return storeSubmitAdditionalPaymentReceipt(appointmentId, receiptData);
+}
+
+/**
  * Cancel an appointment reservation and release the time slot
  */
-export async function cancelAppointment(appointmentId) {
+export async function cancelAppointment(appointmentId, refundDetails = {}) {
   await delay(180);
-  return storeCancelAppointment(appointmentId);
+  return storeCancelAppointment(appointmentId, refundDetails);
 }
 
 /**
  * Cancel a booking by barber/date/time coordinates
  */
-export async function cancelBooking(barberId, dateStr, timeId) {
+export async function cancelBooking(barberId, dateStr, timeId, refundDetails = {}) {
   await delay(150);
-  return storeCancelBooking(barberId, dateStr, timeId);
+  return storeCancelBooking(barberId, dateStr, timeId, refundDetails);
 }
 
 /**
@@ -240,6 +259,69 @@ export async function getStaffAppointmentsByDate(dateStr) {
  */
 export async function setStaffPaymentStatus(refOrId, newStatus) {
   const result = storeUpdateStaffPaymentStatus(refOrId, newStatus);
+  await delay(30);
+  return result;
+}
+
+/**
+ * Staff: Verify additional payment for an upgraded appointment
+ */
+export async function verifyAdditionalPayment(refOrId) {
+  const result = storeVerifyAdditionalPayment(refOrId);
+  await delay(30);
+  return result;
+}
+
+/**
+ * Staff: Verify original payment receipt
+ */
+export async function verifyOriginalPayment(refOrId) {
+  const result = storeVerifyOriginalPayment(refOrId);
+  await delay(30);
+  return result;
+}
+
+/**
+ * Staff: Revert original payment to pending
+ */
+export async function revertOriginalPayment(refOrId) {
+  const result = storeRevertOriginalPayment(refOrId);
+  await delay(30);
+  return result;
+}
+
+/**
+ * Staff: Revert additional payment to pending
+ */
+export async function revertAdditionalPayment(refOrId) {
+  const result = storeRevertAdditionalPayment(refOrId);
+  await delay(30);
+  return result;
+}
+
+/**
+ * Staff: Verify all payments (both original and additional) at once
+ */
+export async function verifyAllPayments(refOrId) {
+  const result = storeVerifyAllPayments(refOrId);
+  await delay(30);
+  return result;
+}
+
+/**
+ * Staff: Update refund status (Refund Approved, Refund Completed)
+ */
+export async function updateRefundStatus(refOrId, newStatus) {
+  const result = storeUpdateRefundStatus(refOrId, newStatus);
+  await delay(30);
+  return result;
+}
+
+/**
+ * Staff: Toggle or mark customer cash change as handed over at the shop
+ */
+export async function toggleShopRefundStatus(refOrId, handedOver = null, staffName = 'Staff') {
+  const result = storeToggleShopRefundStatus(refOrId, handedOver, staffName);
   await delay(30);
   return result;
 }

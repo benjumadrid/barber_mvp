@@ -47,7 +47,9 @@ export default function StaffAiAssistant({
   onFilterPayment, 
   onFilterStatus, 
   onSearchQuery, 
-  onSelectDate 
+  onSelectDate,
+  appointments = [],
+  allAppointments = []
 }) {
   const [isOpen, setIsOpen] = useState(false);
   const [hasInteracted, setHasInteracted] = useState(false);
@@ -138,7 +140,10 @@ export default function StaffAiAssistant({
 
     // Natural typing delay for realistic interaction
     setTimeout(() => {
-      const response = processStaffQuery(q);
+      const activeList = (allAppointments && allAppointments.length > 0)
+        ? allAppointments
+        : ((appointments && appointments.length > 0) ? appointments : null);
+      const response = processStaffQuery(q, activeList);
       const aiMsg = {
         id: `ai-${Date.now()}`,
         sender: 'ai',
