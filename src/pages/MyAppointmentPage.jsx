@@ -157,12 +157,16 @@ export default function MyAppointmentPage() {
     window.addEventListener('focus', fetchAppointment);
     document.addEventListener('visibilitychange', handleVisibility);
 
+    // 5. Fast background polling (1500ms) for real-time live sync without page reload
+    const interval = setInterval(fetchAppointment, 1500);
+
     return () => {
       unsubscribe();
       window.removeEventListener('nhatty_booking_store_changed', handleCustomChange);
       window.removeEventListener('storage', handleStorageChange);
       window.removeEventListener('focus', fetchAppointment);
       document.removeEventListener('visibilitychange', handleVisibility);
+      clearInterval(interval);
     };
   }, [fetchAppointment]);
 
@@ -597,7 +601,7 @@ export default function MyAppointmentPage() {
     setResubmitError('');
 
     try {
-      const res = await resubmitPaymentReceipt(appointment.id || appointment.ref, {
+      const res = await resubmitPaymentReceipt(appointment.ref || appointment.id, {
         receiptPreview: resubmitPreview,
         receiptFileName: resubmitFile?.name || 'replacement_receipt.png',
         target: appointment.rejectionTarget || target

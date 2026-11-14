@@ -164,9 +164,8 @@ export function setReceiptImage(refOrId, dataUrl) {
 export function getReceiptImage(refOrId) {
   if (!refOrId) return null;
   const cleanKey = String(refOrId).trim();
-  if (receiptImageCache.has(cleanKey)) {
-    return receiptImageCache.get(cleanKey);
-  }
+  
+  // 1. Always check localStorage first so real-time updates across tabs are immediately visible
   try {
     const fromLocal = localStorage.getItem(`nhatty_img_${cleanKey}`);
     if (fromLocal) {
@@ -174,6 +173,13 @@ export function getReceiptImage(refOrId) {
       return fromLocal;
     }
   } catch (e) {}
+
+  // 2. Check in-memory Map cache
+  if (receiptImageCache.has(cleanKey)) {
+    return receiptImageCache.get(cleanKey);
+  }
+
+  // 3. Check sessionStorage
   try {
     const fromSession = sessionStorage.getItem(`nhatty_receipt_${cleanKey}`);
     if (fromSession) {
@@ -181,6 +187,7 @@ export function getReceiptImage(refOrId) {
       return fromSession;
     }
   } catch (e) {}
+
   if (cleanKey.endsWith('_additional')) {
     const baseKey = cleanKey.replace(/_additional$/, '');
     try {
@@ -1812,7 +1819,7 @@ export function resubmitPaymentReceipt(refOrId, { receiptPreview, receiptFileNam
   let lastUpdated = null;
   const searchStr = String(refOrId || '').trim().toLowerCase();
 
-  // Cache new receipt image
+  // Cache new receipt image immediately under provided key
   if (refOrId && receiptPreview) {
     if (target === 'additional') {
       setReceiptImage(`${refOrId}_additional`, receiptPreview);
@@ -1828,6 +1835,19 @@ export function resubmitPaymentReceipt(refOrId, { receiptPreview, receiptFileNam
     const bKey = String(key).trim().toLowerCase();
 
     if (bId === searchStr || bRef === searchStr || bKey === searchStr || slotKey === searchStr) {
+      // Guarantee image is cached under all reference aliases
+      if (receiptPreview) {
+        if (target === 'additional') {
+          if (b.ref) setReceiptImage(`${b.ref}_additional`, receiptPreview);
+          if (b.id) setReceiptImage(`${b.id}_additional`, receiptPreview);
+          if (b.bookingReference) setReceiptImage(`${b.bookingReference}_additional`, receiptPreview);
+        } else {
+          if (b.ref) setReceiptImage(b.ref, receiptPreview);
+          if (b.id) setReceiptImage(b.id, receiptPreview);
+          if (b.bookingReference) setReceiptImage(b.bookingReference, receiptPreview);
+        }
+      }
+
       let updatedFields = {};
       if (target === 'additional') {
         updatedFields = {
@@ -1875,6 +1895,18 @@ export function resubmitPaymentReceipt(refOrId, { receiptPreview, receiptFileNam
         const activeSlotKey = `${active.barberId}:${active.dateStr}:${active.timeId}`.toLowerCase();
 
         if (activeRef === searchStr || activeId === searchStr || activeSlotKey === searchStr) {
+          if (receiptPreview) {
+            if (target === 'additional') {
+              if (active.ref) setReceiptImage(`${active.ref}_additional`, receiptPreview);
+              if (active.id) setReceiptImage(`${active.id}_additional`, receiptPreview);
+              if (active.bookingReference) setReceiptImage(`${active.bookingReference}_additional`, receiptPreview);
+            } else {
+              if (active.ref) setReceiptImage(active.ref, receiptPreview);
+              if (active.id) setReceiptImage(active.id, receiptPreview);
+              if (active.bookingReference) setReceiptImage(active.bookingReference, receiptPreview);
+            }
+          }
+
           let updatedFields = {};
           if (target === 'additional') {
             updatedFields = {
@@ -1906,6 +1938,7 @@ export function resubmitPaymentReceipt(refOrId, { receiptPreview, receiptFileNam
           };
           saveActiveBooking(updatedActive);
           lastUpdated = updatedActive;
+          matched = true;
         }
       }
     }

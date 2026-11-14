@@ -109,7 +109,7 @@ export default function BarberDashboardPage() {
       setAllAppointments(allData || []);
       setInMemoryStaffAppointments(allData || []);
 
-      // If activeReceiptModal is open, refresh it with latest data
+      // If activeReceiptModal is open, refresh it with latest data and fresh receipt attachments
       setActiveReceiptModal(prev => {
         if (!prev) return null;
         const found = (allData || []).find(a => 
@@ -117,7 +117,16 @@ export default function BarberDashboardPage() {
           (a.id && a.id === prev.id) || 
           (a.barberId === prev.barberId && a.dateStr === prev.dateStr && a.timeId === prev.timeId)
         );
-        return found ? { ...prev, ...found } : prev;
+        if (!found) return prev;
+        const freshOrig = getReceiptImage(found.ref) || getReceiptImage(found.id) || getReceiptImage(found.bookingReference);
+        const freshAdd = getReceiptImage(`${found.ref}_additional`) || getReceiptImage(`${found.id}_additional`) || getReceiptImage(`${found.bookingReference}_additional`);
+        return {
+          ...prev,
+          ...found,
+          receiptPreview: freshOrig || found.receiptPreview || prev.receiptPreview,
+          originalReceiptPreview: freshOrig || found.originalReceiptPreview || prev.originalReceiptPreview,
+          additionalReceiptPreview: freshAdd || found.additionalReceiptPreview || prev.additionalReceiptPreview
+        };
       });
     } catch (err) {
       console.error('Error loading appointments:', err);
@@ -157,8 +166,8 @@ export default function BarberDashboardPage() {
     window.addEventListener('focus', loadAppointments);
     document.addEventListener('visibilitychange', handleVisibility);
 
-    // 5. Periodic synchronization (fallback interval)
-    const interval = setInterval(loadAppointments, 4000);
+    // 5. Periodic live synchronization (1500ms for zero-refresh updates)
+    const interval = setInterval(loadAppointments, 1500);
 
     return () => {
       unsubscribe();
@@ -1843,12 +1852,18 @@ export default function BarberDashboardPage() {
         const isAllVerified = hasDualReceipts ? isBothVerified : (activeReceiptModal.paymentStatus === 'Verified');
 
         const isAddTab = staffReceiptTab === 'additional';
-        const addImg = activeReceiptModal.additionalReceiptPreview || 
+        const freshAdd = 
           getReceiptImage(`${activeReceiptModal.ref}_additional`) || 
           getReceiptImage(`${activeReceiptModal.id}_additional`) ||
-          getReceiptImage(`${activeReceiptModal.bookingReference}_additional`) ||
+          getReceiptImage(`${activeReceiptModal.bookingReference}_additional`);
+        const addImg = freshAdd || activeReceiptModal.additionalReceiptPreview || 
           (typeof localStorage !== 'undefined' ? (localStorage.getItem(`nhatty_active_additional_${activeReceiptModal.ref}`) || localStorage.getItem(`nhatty_active_additional_${activeReceiptModal.id}`)) : null);
-        const origImg = activeReceiptModal.originalReceiptPreview || activeReceiptModal.receiptPreview || getReceiptImage(activeReceiptModal.ref || activeReceiptModal.id || activeReceiptModal.bookingReference);
+
+        const freshOrig = 
+          getReceiptImage(activeReceiptModal.ref) || 
+          getReceiptImage(activeReceiptModal.id) || 
+          getReceiptImage(activeReceiptModal.bookingReference);
+        const origImg = freshOrig || activeReceiptModal.originalReceiptPreview || activeReceiptModal.receiptPreview;
         const currentPreviewSrc = isAddTab ? addImg : origImg;
 
         return (
