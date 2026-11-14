@@ -1385,20 +1385,24 @@ export default function BarberDashboardPage() {
                         </p>
                       )}
 
-                      {/* Additional Payment verification callout for mobile */}
+                      {/* Additional Payment notification banner for mobile */}
                       {appt.additionalPaymentStatus === 'Pending Verification' && (
-                        <div className="p-2.5 rounded-xl bg-amber-50 border border-amber-200 text-amber-900 flex items-center justify-between gap-2">
+                        <div 
+                          onClick={() => {
+                            setActiveReceiptModal(appt);
+                            setStaffReceiptTab('additional');
+                          }}
+                          className="p-2.5 rounded-xl bg-amber-50 hover:bg-amber-100/80 border border-amber-200 text-amber-900 flex items-center justify-between gap-2 cursor-pointer transition-colors shadow-2xs"
+                          title="Click to review additional payment receipt in modal"
+                        >
                           <div>
-                            <span className="text-[10px] font-bold uppercase tracking-wider block text-amber-800">Additional Proof</span>
+                            <span className="text-[10px] font-bold uppercase tracking-wider block text-amber-800">Additional Proof Submitted</span>
                             <span className="text-xs font-black font-mono">+{appt.additionalSubmittedAmount || appt.remainingAmount} ETB</span>
                           </div>
-                          <button
-                            type="button"
-                            onClick={() => handleVerifyAdditionalPayment(appt)}
-                            className="px-2.5 py-1.5 rounded-lg bg-amber-500 hover:bg-amber-600 text-black text-[11px] font-extrabold uppercase cursor-pointer shadow-xs"
-                          >
-                            Verify +{appt.additionalSubmittedAmount || appt.remainingAmount} ETB
-                          </button>
+                          <span className="inline-flex items-center gap-1 px-2.5 py-1.5 rounded-lg bg-[#FAF2E3] text-[#8C4717] border border-[#E5A93C]/70 text-[11px] font-extrabold uppercase shadow-2xs">
+                            <Eye className="w-3.5 h-3.5 text-[#C88A22]" />
+                            <span>Review Receipt</span>
+                          </span>
                         </div>
                       )}
 
@@ -1421,81 +1425,42 @@ export default function BarberDashboardPage() {
                       )}
 
                       {/* Card Footer: Touch-Friendly 44px Action Controls */}
-                      <div className="flex items-center gap-2 pt-2.5 border-t border-[#E6DDD1]/80 flex-wrap sm:flex-nowrap">
+                      <div className="flex items-center gap-2.5 pt-2.5 border-t border-[#E6DDD1]/80">
+                        {/* Review Receipt Primary Action (Opens Modal where Verify & Reject take place) */}
                         <button
                           type="button"
-                          onClick={() => handleTogglePaymentVerification(appt)}
-                          className={`flex-1 min-h-[44px] inline-flex items-center justify-center gap-1.5 px-3 py-2.5 rounded-xl text-xs font-extrabold uppercase tracking-wider transition-all cursor-pointer border shadow-xs ${
+                          onClick={() => {
+                            setActiveReceiptModal(appt);
+                            setStaffReceiptTab('original');
+                          }}
+                          className={`flex-1 min-h-[44px] inline-flex items-center justify-center gap-2 px-3 py-2.5 rounded-xl text-xs font-black uppercase tracking-wider transition-all cursor-pointer border shadow-xs ${
                             isVerified
                               ? 'bg-emerald-50 text-emerald-800 border-emerald-300 hover:bg-emerald-100'
-                              : 'bg-[#FAF2E3] text-[#8C4717] border-[#E5A93C]/70 hover:bg-[#FAF0DD]'
+                              : (appt.paymentStatus === 'Receipt Rejected' || appt.paymentStatus === 'Additional Receipt Rejected' || appt.originalPaymentStatus === 'Rejected')
+                              ? 'bg-rose-50 text-rose-700 border-rose-300 hover:bg-rose-100'
+                              : 'bg-gradient-to-r from-[#FAF2E3] to-[#FDF8EF] text-[#8C4717] border-[#E5A93C] hover:border-[#C88A22]'
                           }`}
                         >
                           {isVerified ? (
                             <>
                               <CheckCircle2 className="w-4 h-4 text-emerald-600 stroke-[2.5]" />
-                              <span>Verified ✓</span>
+                              <span>Receipt (Verified ✓)</span>
+                            </>
+                          ) : (appt.paymentStatus === 'Receipt Rejected' || appt.paymentStatus === 'Additional Receipt Rejected' || appt.originalPaymentStatus === 'Rejected') ? (
+                            <>
+                              <Ban className="w-4 h-4 text-rose-600 stroke-[2.5]" />
+                              <span>Receipt (Rejected)</span>
                             </>
                           ) : (
                             <>
-                              <Clock className="w-4 h-4 text-[#C88A22]" />
-                              <span>Verify Payment</span>
+                              <Eye className="w-4 h-4 text-[#C88A22]" />
+                              <span>Review Receipt</span>
                             </>
                           )}
                         </button>
 
-                        {appt.paymentStatus !== 'Verified' && (
-                          <button
-                            type="button"
-                            onClick={() => handleOpenRejectModal(appt, 'all')}
-                            className="min-h-[44px] px-3 py-2.5 rounded-xl border border-rose-200 bg-rose-50 hover:bg-rose-100 text-rose-700 text-xs font-bold transition-all cursor-pointer flex items-center gap-1 flex-shrink-0"
-                            title="Reject payment screenshot with a reason"
-                          >
-                            <Ban className="w-3.5 h-3.5 text-rose-600 stroke-[2.5]" />
-                            <span>Reject</span>
-                          </button>
-                        )}
-
-                        {appt.paymentStatus !== 'Verified' && (
-                          <button
-                            type="button"
-                            onClick={() => handleOpenRejectModal(appt, 'all')}
-                            className="inline-flex items-center justify-center gap-1 px-2.5 py-2 rounded-xl text-xs font-bold uppercase transition-all cursor-pointer border border-rose-200 bg-rose-50 text-rose-700 hover:bg-rose-100 flex-shrink-0"
-                            title="Reject payment receipt with reason"
-                          >
-                            <Ban className="w-3.5 h-3.5 text-rose-600 stroke-[2.5]" />
-                            <span>Reject</span>
-                          </button>
-                        )}
-
-                        {(appt.receiptPreview || appt.receiptFileName || appt.paymentMethod === 'cbe' || appt.paymentMethod === 'telebirr') && (
-                          <button
-                            type="button"
-                            onClick={() => {
-                              setActiveReceiptModal(appt);
-                              setStaffReceiptTab('original');
-                            }}
-                            className="min-h-[44px] inline-flex items-center justify-center gap-1.5 px-3.5 py-2.5 rounded-xl border border-[#E5A93C]/60 hover:border-[#E5A93C] bg-[#FAF6F1] hover:bg-white text-[#1E1915] transition-all cursor-pointer shadow-xs flex-shrink-0"
-                            title="View customer payment receipt"
-                          >
-                            <Eye className="w-4 h-4 text-[#C88A22]" />
-                            <span className="text-xs font-extrabold text-[#8C4717]">Receipt</span>
-                          </button>
-                        )}
-
-                        {appt.paymentStatus !== 'Verified' && (
-                          <button
-                            type="button"
-                            onClick={() => handleOpenRejectModal(appt, 'all')}
-                            className="inline-flex items-center justify-center gap-1 px-2.5 py-2 rounded-xl text-xs font-bold uppercase transition-all cursor-pointer border border-rose-200 bg-rose-50 text-rose-700 hover:bg-rose-100 flex-shrink-0"
-                            title="Reject payment receipt with reason"
-                          >
-                            <Ban className="w-3.5 h-3.5 text-rose-600 stroke-[2.5]" />
-                            <span>Reject</span>
-                          </button>
-                        )}
-
-                        <div className="flex-1 sm:flex-initial min-w-[120px]">
+                        {/* Chair Status Selector */}
+                        <div className="flex-1 min-w-[125px]">
                           <select
                             value={appt.status || appt.bookingStatus || 'Confirmed'}
                             onChange={(e) => handleStatusChange(appt, e.target.value)}
@@ -1746,106 +1711,55 @@ export default function BarberDashboardPage() {
                         </div>
                       </div>
 
-                      {/* Right: Payment Verification, Receipt Eye Icon & Chair Status Controls (Cols 9-12, right-aligned) */}
-                      <div className="col-span-4 flex items-center justify-end gap-2 min-w-0">
+                      {/* Right: Review Receipt & Chair Status Controls (Cols 9-12, right-aligned) */}
+                      <div className="col-span-4 flex items-center justify-end gap-2.5 min-w-0">
                         
-                        {/* Primary Payment / Refund Verification Action Button */}
-                        {appt.refundStatus === 'Refund Requested' || (Number(appt.refundAmount) > 0 && appt.refundStatus !== 'Refund Completed' && appt.refundStatus !== 'Completed') ? (
+                        {/* Refund Due Action Button (Only if customer cancelled and refund is requested) */}
+                        {(appt.refundStatus === 'Refund Requested' || (Number(appt.refundAmount) > 0 && appt.refundStatus !== 'Refund Completed' && appt.refundStatus !== 'Completed')) && (
                           <button
                             type="button"
                             onClick={() => handleCompleteRefund(appt)}
-                            className="inline-flex items-center gap-1 px-3 py-2 rounded-xl bg-rose-600 hover:bg-rose-500 text-white text-xs font-black uppercase tracking-wider transition-all cursor-pointer shadow-xs flex-shrink-0"
+                            className="inline-flex items-center gap-1.5 px-3 py-2 rounded-xl bg-rose-600 hover:bg-rose-500 text-white text-xs font-black uppercase tracking-wider transition-all cursor-pointer shadow-xs flex-shrink-0"
                             title="Mark 75% refund paid"
                           >
                             <Check className="w-3.5 h-3.5" />
                             <span>Mark Refund Paid</span>
                           </button>
-                        ) : appt.additionalPaymentStatus === 'Pending Verification' ? (
-                          isOrigVerified ? (
-                            <button
-                              type="button"
-                              onClick={() => handleVerifyAdditionalPayment(appt)}
-                              className="inline-flex items-center gap-1.5 px-3 py-2 rounded-xl bg-amber-500 hover:bg-amber-400 text-black text-xs font-black uppercase tracking-wider transition-all cursor-pointer shadow-xs flex-shrink-0"
-                              title="Verify customer additional payment proof"
-                            >
-                              <CheckCircle2 className="w-3.5 h-3.5" />
-                              <span>Verify +{appt.additionalSubmittedAmount || appt.remainingAmount} ETB</span>
-                            </button>
+                        )}
+
+                        {/* Review Receipt Button (Opens High-Definition Modal where Verify & Reject take place) */}
+                        <button
+                          type="button"
+                          onClick={() => {
+                            setActiveReceiptModal(appt);
+                            setStaffReceiptTab('original');
+                          }}
+                          className={`inline-flex items-center gap-1.5 px-3.5 py-2 rounded-xl text-xs font-extrabold uppercase tracking-wider transition-all cursor-pointer border shadow-xs hover:shadow-md flex-shrink-0 ${
+                            isVerified
+                              ? 'bg-emerald-50 text-emerald-800 border-emerald-300 hover:bg-emerald-100 shadow-emerald-500/10'
+                              : (appt.paymentStatus === 'Receipt Rejected' || appt.paymentStatus === 'Additional Receipt Rejected' || appt.originalPaymentStatus === 'Rejected')
+                              ? 'bg-rose-50 text-rose-700 border-rose-300 hover:bg-rose-100 shadow-rose-500/10'
+                              : 'bg-[#FAF2E3] text-[#8C4717] border-[#E5A93C]/80 hover:bg-[#FAF0DD] hover:border-[#C88A22] shadow-amber-500/10'
+                          }`}
+                          title="Click to view payment receipt screenshot, verify, or reject"
+                        >
+                          {isVerified ? (
+                            <>
+                              <CheckCircle2 className="w-3.5 h-3.5 text-emerald-600 stroke-[2.5]" />
+                              <span>Receipt (Verified ✓)</span>
+                            </>
+                          ) : (appt.paymentStatus === 'Receipt Rejected' || appt.paymentStatus === 'Additional Receipt Rejected' || appt.originalPaymentStatus === 'Rejected') ? (
+                            <>
+                              <Ban className="w-3.5 h-3.5 text-rose-600 stroke-[2.5]" />
+                              <span>Receipt (Rejected)</span>
+                            </>
                           ) : (
-                            <button
-                              type="button"
-                              onClick={() => handleVerifyAllPayments(appt)}
-                              className="inline-flex items-center gap-1.5 px-3 py-2 rounded-xl bg-amber-500 hover:bg-amber-400 text-black text-xs font-black uppercase tracking-wider transition-all cursor-pointer shadow-xs flex-shrink-0"
-                              title="Verify all payments (Original + Additional)"
-                            >
-                              <CheckCircle2 className="w-3.5 h-3.5" />
-                              <span>Verify All ({appt.price || appt.amountPaid} ETB)</span>
-                            </button>
-                          )
-                        ) : (
-                          <button
-                            type="button"
-                            onClick={() => handleTogglePaymentVerification(appt)}
-                            className={`inline-flex items-center justify-center gap-1.5 px-3 py-2 rounded-xl text-xs font-extrabold uppercase tracking-wider transition-all cursor-pointer border shadow-xs flex-shrink-0 ${
-                              isVerified
-                                ? 'bg-emerald-50 text-emerald-800 border-emerald-300 hover:bg-emerald-100 shadow-emerald-500/10'
-                                : 'bg-[#FAF2E3] text-[#8C4717] border-[#E5A93C]/70 hover:bg-[#FAF0DD] shadow-amber-500/10'
-                            }`}
-                            title="Click to toggle payment verification"
-                          >
-                            {isVerified ? (
-                              <>
-                                <CheckCircle2 className="w-3.5 h-3.5 text-emerald-600 stroke-[2.5]" />
-                                <span>Verified ✓</span>
-                              </>
-                            ) : (
-                              <>
-                                <Clock className="w-3.5 h-3.5 text-[#C88A22]" />
-                                <span>Verify Payment</span>
-                              </>
-                            )}
-                          </button>
-                        )}
-
-                        {appt.paymentStatus !== 'Verified' && (
-                          <button
-                            type="button"
-                            onClick={() => handleOpenRejectModal(appt, 'all')}
-                            className="inline-flex items-center justify-center gap-1 px-2.5 py-2 rounded-xl text-xs font-bold uppercase transition-all cursor-pointer border border-rose-200 bg-rose-50 text-rose-700 hover:bg-rose-100 flex-shrink-0"
-                            title="Reject payment receipt with reason"
-                          >
-                            <Ban className="w-3.5 h-3.5 text-rose-600 stroke-[2.5]" />
-                            <span>Reject</span>
-                          </button>
-                        )}
-
-                        {/* View Receipt Button */}
-                        {(appt.receiptPreview || appt.receiptFileName || appt.paymentMethod === 'cbe' || appt.paymentMethod === 'telebirr') && (
-                          <button
-                            type="button"
-                            onClick={() => {
-                              setActiveReceiptModal(appt);
-                              setStaffReceiptTab('original');
-                            }}
-                            className="inline-flex items-center gap-1 px-3 py-2 rounded-xl border border-[#E5A93C]/60 hover:border-[#E5A93C] bg-[#FAF6F1] hover:bg-white text-[#1E1915] transition-all cursor-pointer shadow-xs hover:shadow-md group flex-shrink-0"
-                            title="View uploaded payment receipt screenshot"
-                          >
-                            <Eye className="w-3.5 h-3.5 text-[#C88A22] group-hover:scale-110 transition-transform" />
-                            <span className="text-xs font-extrabold text-[#8C4717]">Receipt</span>
-                          </button>
-                        )}
-
-                        {appt.paymentStatus !== 'Verified' && (
-                          <button
-                            type="button"
-                            onClick={() => handleOpenRejectModal(appt, 'all')}
-                            className="inline-flex items-center justify-center gap-1 px-2.5 py-2 rounded-xl text-xs font-bold uppercase transition-all cursor-pointer border border-rose-200 bg-rose-50 text-rose-700 hover:bg-rose-100 flex-shrink-0"
-                            title="Reject payment receipt with reason"
-                          >
-                            <Ban className="w-3.5 h-3.5 text-rose-600 stroke-[2.5]" />
-                            <span>Reject</span>
-                          </button>
-                        )}
+                            <>
+                              <Eye className="w-3.5 h-3.5 text-[#C88A22]" />
+                              <span>Review Receipt</span>
+                            </>
+                          )}
+                        </button>
 
                         {/* Chair Status Selector */}
                         <div className="relative flex-shrink-0">
