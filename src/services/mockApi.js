@@ -107,6 +107,8 @@ import {
   verifyAllPayments as storeVerifyAllPayments,
   updateRefundStatus as storeUpdateRefundStatus,
   toggleShopRefundStatus as storeToggleShopRefundStatus,
+  rejectPaymentReceipt as storeRejectPaymentReceipt,
+  resubmitPaymentReceipt as storeResubmitPaymentReceipt,
   isSlotBooked as storeIsSlotBooked, 
   getBarberTimeSlots,
   getSlotStatus,
@@ -331,6 +333,24 @@ export async function toggleShopRefundStatus(refOrId, handedOver = null, staffNa
  */
 export async function setStaffBookingStatus(refOrId, newStatus) {
   const result = storeUpdateStaffBookingStatus(refOrId, newStatus);
+  await delay(30);
+  return result;
+}
+
+/**
+ * Staff: Reject payment receipt with reason
+ */
+export async function rejectPaymentReceipt(refOrId, options = {}) {
+  const result = storeRejectPaymentReceipt(refOrId, options);
+  await delay(30);
+  return result;
+}
+
+/**
+ * Customer: Re-upload valid replacement receipt
+ */
+export async function resubmitPaymentReceipt(refOrId, receiptData) {
+  const result = storeResubmitPaymentReceipt(refOrId, receiptData);
   await delay(30);
   return result;
 }

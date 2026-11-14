@@ -29,7 +29,8 @@ import {
   CheckCircle2, 
   Phone,
   UploadCloud,
-  ShieldAlert
+  ShieldAlert,
+  Ban
 } from 'lucide-react';
 
 import { MOCK_SERVICES } from '../data/servicesData';
@@ -39,6 +40,7 @@ import {
   updateAppointment, 
   cancelAppointment,
   submitAdditionalPaymentReceipt,
+  resubmitPaymentReceipt,
   isAppointmentPast,
   isAppointmentActive,
   formatAppointmentRelativeDate,
@@ -95,6 +97,15 @@ export default function MyAppointmentPage() {
   const [additionalReceiptPreview, setAdditionalReceiptPreview] = useState(null);
   const [additionalReceiptError, setAdditionalReceiptError] = useState('');
   const [isSubmittingAdditional, setIsSubmittingAdditional] = useState(false);
+
+  // ── Replacement Receipt Re-upload State (for rejected receipts) ──
+  const [resubmitFile, setResubmitFile] = useState(null);
+  const [resubmitPreview, setResubmitPreview] = useState(null);
+  const [isScanningResubmit, setIsScanningResubmit] = useState(false);
+  const [isSubmittingReplacement, setIsSubmittingReplacement] = useState(false);
+  const [resubmitSuccessMessage, setResubmitSuccessMessage] = useState('');
+  const [resubmitError, setResubmitError] = useState('');
+  const resubmitFileInputRef = useRef(null);
 
   // ── Countdown timer for 11-minute editing window ──────────────
   const [currentTime, setCurrentTime] = useState(Date.now());
@@ -500,6 +511,112 @@ export default function MyAppointmentPage() {
       setAdditionalReceiptError(res.error || 'Failed to submit additional receipt.');
     }
     setIsSubmittingAdditional(false);
+  };
+
+  // ── Replacement Receipt File Selection & Canvas Compressor ────
+  const handleResubmitFileSelect = (e) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+    setResubmitError('');
+
+    const validTypes = ['image/jpeg', 'image/jpg', 'image/png', 'image/webp'];
+    if (!validTypes.includes(file.type.toLowerCase())) {
+      setResubmitError('Please upload an image file (JPG, PNG, or WEBP).');
+      return;
+    }
+
+    if (file.size > 5 * 1024 * 1024) {
+      setResubmitError('Image size exceeds 5MB. Please choose a smaller file.');
+      return;
+    }
+
+    setIsScanningResubmit(true);
+    setResubmitFile(file);
+
+    const reader = new FileReader();
+    reader.onload = (evt) => {
+      const rawDataUrl = evt.target.result;
+      if (typeof window === 'undefined' || !window.Image) {
+        setResubmitPreview(rawDataUrl);
+        setIsScanningResubmit(false);
+        return;
+      }
+
+      const img = new Image();
+      img.onload = () => {
+        const maxDimension = 1800;
+        let width = img.width;
+        let height = img.height;
+
+        if (width > maxDimension || height > maxDimension) {
+          if (width > height) {
+            height = Math.round((height * maxDimension) / width);
+            width = maxDimension;
+          } else {
+            width = Math.round((width * maxDimension) / height);
+            height = maxDimension;
+          }
+        }
+
+        try {
+          const canvas = document.createElement('canvas');
+          canvas.width = width;
+          canvas.height = height;
+          const ctx = canvas.getContext('2d');
+          ctx.imageSmoothingEnabled = true;
+          ctx.imageSmoothingQuality = 'high';
+          ctx.drawImage(img, 0, 0, width, height);
+          const compressedDataUrl = canvas.toDataURL('image/jpeg', 0.88);
+          setResubmitPreview(compressedDataUrl);
+        } catch (canvasErr) {
+          setResubmitPreview(rawDataUrl);
+        }
+        setIsScanningResubmit(false);
+      };
+      img.onerror = () => {
+        setResubmitPreview(rawDataUrl);
+        setIsScanningResubmit(false);
+      };
+      img.src = rawDataUrl;
+    };
+    reader.onerror = () => {
+      setResubmitError('Failed to read replacement receipt image.');
+      setIsScanningResubmit(false);
+    };
+    reader.readAsDataURL(file);
+  };
+
+  // ── Submit Replacement Receipt for Re-verification ───────────
+  const handleConfirmResubmitReceipt = async (target = 'original') => {
+    if (!resubmitPreview) {
+      setResubmitError('Please select your replacement receipt screenshot first.');
+      return;
+    }
+
+    setIsSubmittingReplacement(true);
+    setResubmitError('');
+
+    try {
+      const res = await resubmitPaymentReceipt(appointment.id || appointment.ref, {
+        receiptPreview: resubmitPreview,
+        receiptFileName: resubmitFile?.name || 'replacement_receipt.png',
+        target: appointment.rejectionTarget || target
+      });
+
+      if (res.success && res.appointment) {
+        setAppointment(res.appointment);
+        setResubmitFile(null);
+        setResubmitPreview(null);
+        setResubmitSuccessMessage('Replacement receipt submitted successfully! Staff will re-verify your payment shortly.');
+        setTimeout(() => setResubmitSuccessMessage(''), 7000);
+      } else {
+        setResubmitError(res.error || 'Failed to submit replacement receipt.');
+      }
+    } catch (err) {
+      setResubmitError('Connection error. Please try again.');
+    } finally {
+      setIsSubmittingReplacement(false);
+    }
   };
 
   // Loading State
@@ -1081,6 +1198,11 @@ export default function MyAppointmentPage() {
   const arrivalReminder = appointment.arrivalReminder || '10 mins early';
   const displayDateStr = formatAppointmentRelativeDate(appointment.dateStr, currentTime);
 
+  const isRejected = appointment.paymentStatus === 'Receipt Rejected' || 
+                     appointment.paymentStatus === 'Additional Receipt Rejected' ||
+                     appointment.originalPaymentStatus === 'Rejected' ||
+                     appointment.additionalPaymentStatus === 'Rejected';
+
   return (
     <div className="min-h-screen bg-[#F4EFEB] pt-24 pb-28 px-4 sm:px-6">
       <div className="max-w-xl mx-auto">
@@ -1319,7 +1441,11 @@ export default function MyAppointmentPage() {
                   </span>
                   <div className="flex items-center gap-2 mt-0.5">
                     <p className="text-xs font-bold text-[#1E1915]">{paymentLabel}</p>
-                    {appointment.paymentStatus === 'Verified' ? (
+                    {isRejected ? (
+                      <span className="inline-flex items-center gap-1 text-[10px] font-extrabold text-rose-800 bg-rose-50 border border-rose-300 px-2.5 py-0.5 rounded-full shadow-xs animate-pulse">
+                        <AlertTriangle className="w-3 h-3 text-rose-600 stroke-[2.5]" /> Receipt Rejected
+                      </span>
+                    ) : appointment.paymentStatus === 'Verified' ? (
                       <span className="inline-flex items-center gap-1 text-[10px] font-extrabold text-emerald-800 bg-emerald-50 border border-emerald-300 px-2.5 py-0.5 rounded-full shadow-xs">
                         <CheckCircle2 className="w-3 h-3 text-emerald-600 stroke-[2.5]" /> Verified ✓
                       </span>
@@ -1410,6 +1536,146 @@ export default function MyAppointmentPage() {
                 })()}
               </div>
             </div>
+
+            {/* ── Real-Time Payment Receipt Rejection Alert & Re-upload Interface ── */}
+            {Boolean(isRejected) && (
+              <div className="p-4 sm:p-5 rounded-2xl bg-rose-50/95 border-2 border-rose-400 text-left space-y-3.5 shadow-md animate-[fadeIn_0.3s_ease-out]">
+                <div className="flex items-start justify-between gap-3 flex-wrap">
+                  <div className="flex items-center gap-2.5">
+                    <div className="w-9 h-9 rounded-xl bg-rose-100 border border-rose-300 flex items-center justify-center text-rose-700 flex-shrink-0">
+                      <AlertTriangle className="w-5 h-5 text-rose-600 stroke-[2.5]" />
+                    </div>
+                    <div>
+                      <h4 className="text-xs sm:text-sm font-black uppercase text-rose-950 font-['Cinzel',serif] tracking-wider">
+                        Payment Receipt Rejected — Action Required
+                      </h4>
+                      <span className="text-[10.5px] font-mono text-rose-800 font-bold">
+                        {appointment.rejectionTarget === 'additional' ? 'Upgrade Receipt Rejected (+100 ETB)' : 'Payment Receipt Rejected'}
+                      </span>
+                    </div>
+                  </div>
+                  <span className="text-[10px] font-mono font-black px-2.5 py-0.5 rounded-full bg-rose-600 text-white uppercase tracking-wider animate-pulse">
+                    Action Needed
+                  </span>
+                </div>
+
+                {/* Staff Feedback Note */}
+                <div className="bg-white border-2 border-rose-200 p-3.5 rounded-xl space-y-1 shadow-xs">
+                  <span className="text-[10px] font-black uppercase tracking-wider text-rose-800 block">
+                    Barbershop Receptionist Note:
+                  </span>
+                  <p className="text-xs font-extrabold text-[#1E1915] leading-relaxed">
+                    "{appointment.rejectionReason || 'Please upload a clear, valid payment confirmation screenshot.'}"
+                  </p>
+                  {appointment.rejectedBy && (
+                    <span className="text-[10px] text-[#8C7A6D] block pt-0.5">
+                      Reviewed by: <strong>{appointment.rejectedBy}</strong>
+                    </span>
+                  )}
+                </div>
+
+                {resubmitSuccessMessage ? (
+                  <div className="bg-emerald-50 border border-emerald-300 p-3 rounded-xl text-xs font-bold text-emerald-800 flex items-center gap-2">
+                    <CheckCircle2 className="w-4 h-4 text-emerald-600 flex-shrink-0" />
+                    <span>{resubmitSuccessMessage}</span>
+                  </div>
+                ) : (
+                  /* Interactive Replacement Upload */
+                  <div className="space-y-2.5 pt-1">
+                    <div className="flex items-center justify-between">
+                      <label className="text-xs font-extrabold text-[#1E1915] flex items-center gap-1.5">
+                        <UploadCloud className="w-4 h-4 text-rose-600" />
+                        <span>Upload Replacement Payment Screenshot <span className="text-rose-600">*</span></span>
+                      </label>
+                      <span className="text-[10px] font-bold text-rose-700 uppercase">JPG, PNG, or WEBP</span>
+                    </div>
+
+                    <input
+                      ref={resubmitFileInputRef}
+                      type="file"
+                      accept="image/jpeg,image/jpg,image/png,image/webp"
+                      onChange={handleResubmitFileSelect}
+                      className="hidden"
+                    />
+
+                    {resubmitError && (
+                      <p className="text-xs font-bold text-rose-600 bg-rose-100/70 p-2 rounded-lg border border-rose-300">
+                        {resubmitError}
+                      </p>
+                    )}
+
+                    {resubmitPreview ? (
+                      <div className="bg-white border-2 border-emerald-500 rounded-2xl p-3 flex items-center justify-between gap-3 shadow-xs">
+                        <div className="flex items-center gap-3 min-w-0">
+                          <img
+                            src={resubmitPreview}
+                            alt="Replacement receipt preview"
+                            className="w-12 h-12 object-cover rounded-xl border border-emerald-300 flex-shrink-0 cursor-pointer"
+                          />
+                          <div className="min-w-0">
+                            <p className="text-xs font-bold text-emerald-950 truncate">Replacement Ready</p>
+                            <p className="text-[11px] text-[#6E5D52] truncate">{resubmitFile?.name || 'replacement.png'}</p>
+                          </div>
+                        </div>
+                        <div className="flex items-center gap-2 flex-shrink-0">
+                          <button
+                            type="button"
+                            onClick={() => {
+                              setResubmitFile(null);
+                              setResubmitPreview(null);
+                            }}
+                            className="text-[11px] font-bold text-rose-600 hover:text-rose-800 px-2.5 py-1 rounded-lg border border-rose-200 bg-rose-50 cursor-pointer"
+                          >
+                            Change
+                          </button>
+                        </div>
+                      </div>
+                    ) : (
+                      <div
+                        onClick={() => resubmitFileInputRef.current?.click()}
+                        className="border-2 border-dashed border-rose-300 hover:border-rose-500 bg-white hover:bg-rose-50/50 rounded-2xl p-4 text-center cursor-pointer transition-all shadow-xs group"
+                      >
+                        {isScanningResubmit ? (
+                          <div className="flex items-center justify-center gap-2 py-1 text-xs font-bold text-[#1E1915]">
+                            <Loader2 className="w-4 h-4 text-rose-600 animate-spin" />
+                            <span>Optimizing replacement receipt...</span>
+                          </div>
+                        ) : (
+                          <div className="flex flex-col items-center justify-center gap-1.5 py-1">
+                            <UploadCloud className="w-6 h-6 text-rose-600" />
+                            <p className="text-xs font-extrabold text-[#1E1915]">
+                              Click to Choose Replacement Payment Screenshot
+                            </p>
+                            <p className="text-[10.5px] text-rose-800 font-medium">
+                              Select a clear receipt showing your transaction reference and transfer details
+                            </p>
+                          </div>
+                        )}
+                      </div>
+                    )}
+
+                    <button
+                      type="button"
+                      onClick={() => handleConfirmResubmitReceipt(appointment.rejectionTarget || 'original')}
+                      disabled={!resubmitPreview || isSubmittingReplacement}
+                      className="w-full py-3.5 px-5 rounded-xl bg-gradient-to-r from-rose-600 via-rose-500 to-amber-600 text-white text-xs font-black uppercase tracking-wider shadow-md hover:brightness-105 active:scale-[0.98] transition-all disabled:opacity-40 cursor-pointer flex items-center justify-center gap-2"
+                    >
+                      {isSubmittingReplacement ? (
+                        <>
+                          <Loader2 className="w-4 h-4 animate-spin" />
+                          <span>SUBMITTING REPLACEMENT RECEIPT...</span>
+                        </>
+                      ) : (
+                        <>
+                          <Check className="w-4 h-4 stroke-[3]" />
+                          <span>SUBMIT REPLACEMENT RECEIPT FOR RE-VERIFICATION</span>
+                        </>
+                      )}
+                    </button>
+                  </div>
+                )}
+              </div>
+            )}
 
             {/* Additional Payment Requirement Card — Strictly for Genuine Upgrades with Remaining Balance */}
             {(() => {

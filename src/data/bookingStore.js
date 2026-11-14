@@ -1690,6 +1690,231 @@ export function toggleShopRefundStatus(refOrId, handedOver = null, staffName = '
   return { success: matched, appointment: lastUpdated };
 }
 
+// ── Reject Payment Receipt with Reason (Staff Dashboard) ─────────────
+export function rejectPaymentReceipt(refOrId, options = {}) {
+  const reason = typeof options === 'string' ? options : (options.reason || 'Payment receipt verification failed');
+  const target = (typeof options === 'object' && options.target) ? options.target : 'all'; // 'original' | 'additional' | 'all'
+  const staffName = (typeof options === 'object' && options.staffName) ? options.staffName : 'Staff Admin';
+  
+  loadBookedSlotsFromStorage();
+  let matched = false;
+  let lastUpdated = null;
+  const searchStr = String(refOrId || '').trim().toLowerCase();
+
+  for (const [key, b] of bookedSlots.entries()) {
+    const slotKey = `${b.barberId}:${b.dateStr}:${b.timeId}`.toLowerCase();
+    const bRef = String(b.ref || b.bookingReference || '').trim().toLowerCase();
+    const bId = String(b.id || '').trim().toLowerCase();
+    const bKey = String(key).trim().toLowerCase();
+
+    if (bId === searchStr || bRef === searchStr || bKey === searchStr || slotKey === searchStr) {
+      let newPaymentStatus = 'Receipt Rejected';
+      let origStatus = b.originalPaymentStatus || 'Rejected';
+      let addStatus = b.additionalPaymentStatus;
+
+      if (target === 'additional') {
+        addStatus = 'Rejected';
+        newPaymentStatus = 'Additional Receipt Rejected';
+      } else if (target === 'original') {
+        origStatus = 'Rejected';
+        newPaymentStatus = 'Receipt Rejected';
+      } else {
+        origStatus = 'Rejected';
+        if (b.additionalPaymentStatus && b.additionalPaymentStatus !== 'None') {
+          addStatus = 'Rejected';
+        }
+        newPaymentStatus = 'Receipt Rejected';
+      }
+
+      const updated = {
+        ...b,
+        paymentStatus: newPaymentStatus,
+        originalPaymentStatus: origStatus,
+        additionalPaymentStatus: addStatus,
+        rejectionReason: reason,
+        rejectionTarget: target,
+        rejectedAt: new Date().toISOString(),
+        rejectedBy: staffName,
+        paidAmount: 0,
+        amountPaid: 0,
+        verifiedOriginalAmount: 0,
+        verifiedAdditionalAmount: 0,
+        updatedAt: new Date().toISOString()
+      };
+
+      bookedSlots.set(key, updated);
+      lastUpdated = updated;
+      matched = true;
+    }
+  }
+
+  // Also update active booking in localStorage
+  try {
+    const raw = localStorage.getItem(ACTIVE_BOOKING_KEY);
+    if (raw) {
+      const active = JSON.parse(raw);
+      if (active) {
+        const activeRef = String(active.ref || active.bookingReference || '').trim().toLowerCase();
+        const activeId = String(active.id || '').trim().toLowerCase();
+        const activeSlotKey = `${active.barberId}:${active.dateStr}:${active.timeId}`.toLowerCase();
+
+        if (activeRef === searchStr || activeId === searchStr || activeSlotKey === searchStr) {
+          let newPaymentStatus = 'Receipt Rejected';
+          let origStatus = active.originalPaymentStatus || 'Rejected';
+          let addStatus = active.additionalPaymentStatus;
+
+          if (target === 'additional') {
+            addStatus = 'Rejected';
+            newPaymentStatus = 'Additional Receipt Rejected';
+          } else if (target === 'original') {
+            origStatus = 'Rejected';
+            newPaymentStatus = 'Receipt Rejected';
+          } else {
+            origStatus = 'Rejected';
+            if (active.additionalPaymentStatus && active.additionalPaymentStatus !== 'None') {
+              addStatus = 'Rejected';
+            }
+            newPaymentStatus = 'Receipt Rejected';
+          }
+
+          const updatedActive = {
+            ...active,
+            paymentStatus: newPaymentStatus,
+            originalPaymentStatus: origStatus,
+            additionalPaymentStatus: addStatus,
+            rejectionReason: reason,
+            rejectionTarget: target,
+            rejectedAt: new Date().toISOString(),
+            rejectedBy: staffName,
+            paidAmount: 0,
+            amountPaid: 0,
+            verifiedOriginalAmount: 0,
+            verifiedAdditionalAmount: 0,
+            updatedAt: new Date().toISOString()
+          };
+          saveActiveBooking(updatedActive);
+          lastUpdated = updatedActive;
+        }
+      }
+    }
+  } catch (e) {}
+
+  saveBookedSlotsToStorage();
+  notifyBookingStoreChange();
+  return { success: matched, appointment: lastUpdated };
+}
+
+// ── Resubmit / Re-upload Payment Receipt (Customer View) ──────────────
+export function resubmitPaymentReceipt(refOrId, { receiptPreview, receiptFileName, target = 'original' }) {
+  loadBookedSlotsFromStorage();
+  let matched = false;
+  let lastUpdated = null;
+  const searchStr = String(refOrId || '').trim().toLowerCase();
+
+  // Cache new receipt image
+  if (refOrId && receiptPreview) {
+    if (target === 'additional') {
+      setReceiptImage(`${refOrId}_additional`, receiptPreview);
+    } else {
+      setReceiptImage(refOrId, receiptPreview);
+    }
+  }
+
+  for (const [key, b] of bookedSlots.entries()) {
+    const slotKey = `${b.barberId}:${b.dateStr}:${b.timeId}`.toLowerCase();
+    const bRef = String(b.ref || b.bookingReference || '').trim().toLowerCase();
+    const bId = String(b.id || '').trim().toLowerCase();
+    const bKey = String(key).trim().toLowerCase();
+
+    if (bId === searchStr || bRef === searchStr || bKey === searchStr || slotKey === searchStr) {
+      let updatedFields = {};
+      if (target === 'additional') {
+        updatedFields = {
+          additionalReceiptPreview: receiptPreview,
+          additionalReceiptFileName: receiptFileName || 'resubmitted_additional_receipt.png',
+          additionalPaymentStatus: 'Pending Verification',
+          paymentStatus: b.originalPaymentStatus === 'Verified' ? 'Additional Payment Pending Verification' : 'Verification Pending',
+        };
+      } else {
+        updatedFields = {
+          receiptPreview: receiptPreview,
+          originalReceiptPreview: receiptPreview,
+          receiptFileName: receiptFileName || 'resubmitted_receipt.png',
+          originalPaymentStatus: 'Pending Verification',
+          paymentStatus: 'Verification Pending',
+        };
+      }
+
+      const updated = {
+        ...b,
+        ...updatedFields,
+        previousRejectionReason: b.rejectionReason,
+        rejectionReason: null,
+        rejectionTarget: null,
+        rejectedAt: null,
+        rejectedBy: null,
+        reuploadedAt: new Date().toISOString(),
+        updatedAt: new Date().toISOString()
+      };
+
+      bookedSlots.set(key, updated);
+      lastUpdated = updated;
+      matched = true;
+    }
+  }
+
+  // Also update active booking in localStorage
+  try {
+    const raw = localStorage.getItem(ACTIVE_BOOKING_KEY);
+    if (raw) {
+      const active = JSON.parse(raw);
+      if (active) {
+        const activeRef = String(active.ref || active.bookingReference || '').trim().toLowerCase();
+        const activeId = String(active.id || '').trim().toLowerCase();
+        const activeSlotKey = `${active.barberId}:${active.dateStr}:${active.timeId}`.toLowerCase();
+
+        if (activeRef === searchStr || activeId === searchStr || activeSlotKey === searchStr) {
+          let updatedFields = {};
+          if (target === 'additional') {
+            updatedFields = {
+              additionalReceiptPreview: receiptPreview,
+              additionalReceiptFileName: receiptFileName || 'resubmitted_additional_receipt.png',
+              additionalPaymentStatus: 'Pending Verification',
+              paymentStatus: active.originalPaymentStatus === 'Verified' ? 'Additional Payment Pending Verification' : 'Verification Pending',
+            };
+          } else {
+            updatedFields = {
+              receiptPreview: receiptPreview,
+              originalReceiptPreview: receiptPreview,
+              receiptFileName: receiptFileName || 'resubmitted_receipt.png',
+              originalPaymentStatus: 'Pending Verification',
+              paymentStatus: 'Verification Pending',
+            };
+          }
+
+          const updatedActive = {
+            ...active,
+            ...updatedFields,
+            previousRejectionReason: active.rejectionReason,
+            rejectionReason: null,
+            rejectionTarget: null,
+            rejectedAt: null,
+            rejectedBy: null,
+            reuploadedAt: new Date().toISOString(),
+            updatedAt: new Date().toISOString()
+          };
+          saveActiveBooking(updatedActive);
+          lastUpdated = updatedActive;
+        }
+      }
+    }
+  } catch (e) {}
+
+  saveBookedSlotsToStorage();
+  notifyBookingStoreChange();
+  return { success: matched, appointment: lastUpdated };
+}
+
 // ── Active Booking / My Appointment Persistence ────────────────────────
 export function getActiveBooking() {
   try {

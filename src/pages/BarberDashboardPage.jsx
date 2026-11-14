@@ -27,7 +27,8 @@ import {
   FileCheck2,
   AlertTriangle,
   RotateCcw,
-  Sparkles
+  Sparkles,
+  Ban
 } from 'lucide-react';
 import { logoutStaff, getStaffSession, isStaffAuthenticated } from '../services/authService';
 import { 
@@ -42,6 +43,7 @@ import {
   verifyAllPayments,
   updateRefundStatus,
   toggleShopRefundStatus,
+  rejectPaymentReceipt,
   subscribeToBookingStore,
 } from '../services/mockApi';
 import { formatDateKey, formatDisplayDate, getUpcomingDates, getReceiptImage } from '../data/bookingStore';
@@ -49,6 +51,15 @@ import { MOCK_BARBERS } from '../data/barbersData';
 import { setInMemoryStaffAppointments } from '../services/staffAiEngine';
 import StaffAiAssistant from '../components/dashboard/StaffAiAssistant';
 import ReceiptZoomViewer from '../components/common/ReceiptZoomViewer';
+
+const PRESET_REJECTION_REASONS = [
+  'Unclear or blurry screenshot (please re-upload a clear receipt)',
+  'Incorrect transfer amount (does not match service total)',
+  'Wrong recipient account (not sent to Nhatty Barber House)',
+  'Duplicate or previously used transaction screenshot',
+  'Transaction date or time does not match appointment',
+  'Invalid CBE / Telebirr transaction confirmation'
+];
 
 export default function BarberDashboardPage() {
   const navigate = useNavigate();
@@ -79,6 +90,13 @@ export default function BarberDashboardPage() {
   const [activeReceiptModal, setActiveReceiptModal] = useState(null);
   const [staffReceiptTab, setStaffReceiptTab] = useState('original');
   const [copiedRef, setCopiedRef] = useState(null);
+
+  // Receipt Rejection Modal State
+  const [rejectModalAppt, setRejectModalAppt] = useState(null);
+  const [rejectReason, setRejectReason] = useState('Unclear or blurry screenshot (please re-upload a clear receipt)');
+  const [rejectTarget, setRejectTarget] = useState('all'); // 'all' | 'original' | 'additional'
+  const [isRejecting, setIsRejecting] = useState(false);
+  const [rejectSuccessToast, setRejectSuccessToast] = useState('');
 
   // Load appointments for selected date and all dates
   const loadAppointments = async () => {
@@ -405,6 +423,49 @@ export default function BarberDashboardPage() {
     }
 
     await updateRefundStatus(targetId, 'Refund Completed');
+  };
+
+  // Staff Reject Payment Receipt with Reason
+  const handleOpenRejectModal = (appt, target = 'all') => {
+    setRejectModalAppt(appt);
+    setRejectTarget(target);
+    setRejectReason('Unclear or blurry screenshot (please re-upload a clear receipt)');
+  };
+
+  const handleConfirmReject = async () => {
+    if (!rejectModalAppt || !rejectReason.trim()) return;
+    setIsRejecting(true);
+    try {
+      const targetId = rejectModalAppt.id || rejectModalAppt.ref || `${rejectModalAppt.barberId}:${rejectModalAppt.dateStr}:${rejectModalAppt.timeId}`;
+      const res = await rejectPaymentReceipt(targetId, {
+        reason: rejectReason.trim(),
+        target: rejectTarget,
+        staffName: staffSession?.name || 'Staff Admin'
+      });
+
+      if (res.success && res.appointment) {
+        setAppointments(prev => prev.map(a => 
+          (a.id === targetId || a.ref === targetId || (a.barberId === res.appointment.barberId && a.dateStr === res.appointment.dateStr && a.timeId === res.appointment.timeId))
+            ? res.appointment 
+            : a
+        ));
+        setAllAppointments(prev => prev.map(a => 
+          (a.id === targetId || a.ref === targetId || (a.barberId === res.appointment.barberId && a.dateStr === res.appointment.dateStr && a.timeId === res.appointment.timeId))
+            ? res.appointment 
+            : a
+        ));
+        if (activeReceiptModal) {
+          setActiveReceiptModal(res.appointment);
+        }
+        setRejectSuccessToast(`Receipt rejected for ${res.appointment.ref || 'reservation'}. Reason sent to customer!`);
+        setTimeout(() => setRejectSuccessToast(''), 4500);
+      }
+      setRejectModalAppt(null);
+    } catch (err) {
+      console.error('Error rejecting receipt:', err);
+    } finally {
+      setIsRejecting(false);
+    }
   };
 
   // Staff Mark / Toggle Cash Change Handover (Instant Optimistic UI + Storage Sync)
@@ -1383,6 +1444,30 @@ export default function BarberDashboardPage() {
                           )}
                         </button>
 
+                        {appt.paymentStatus !== 'Verified' && (
+                          <button
+                            type="button"
+                            onClick={() => handleOpenRejectModal(appt, 'all')}
+                            className="min-h-[44px] px-3 py-2.5 rounded-xl border border-rose-200 bg-rose-50 hover:bg-rose-100 text-rose-700 text-xs font-bold transition-all cursor-pointer flex items-center gap-1 flex-shrink-0"
+                            title="Reject payment screenshot with a reason"
+                          >
+                            <Ban className="w-3.5 h-3.5 text-rose-600 stroke-[2.5]" />
+                            <span>Reject</span>
+                          </button>
+                        )}
+
+                        {appt.paymentStatus !== 'Verified' && (
+                          <button
+                            type="button"
+                            onClick={() => handleOpenRejectModal(appt, 'all')}
+                            className="inline-flex items-center justify-center gap-1 px-2.5 py-2 rounded-xl text-xs font-bold uppercase transition-all cursor-pointer border border-rose-200 bg-rose-50 text-rose-700 hover:bg-rose-100 flex-shrink-0"
+                            title="Reject payment receipt with reason"
+                          >
+                            <Ban className="w-3.5 h-3.5 text-rose-600 stroke-[2.5]" />
+                            <span>Reject</span>
+                          </button>
+                        )}
+
                         {(appt.receiptPreview || appt.receiptFileName || appt.paymentMethod === 'cbe' || appt.paymentMethod === 'telebirr') && (
                           <button
                             type="button"
@@ -1395,6 +1480,18 @@ export default function BarberDashboardPage() {
                           >
                             <Eye className="w-4 h-4 text-[#C88A22]" />
                             <span className="text-xs font-extrabold text-[#8C4717]">Receipt</span>
+                          </button>
+                        )}
+
+                        {appt.paymentStatus !== 'Verified' && (
+                          <button
+                            type="button"
+                            onClick={() => handleOpenRejectModal(appt, 'all')}
+                            className="inline-flex items-center justify-center gap-1 px-2.5 py-2 rounded-xl text-xs font-bold uppercase transition-all cursor-pointer border border-rose-200 bg-rose-50 text-rose-700 hover:bg-rose-100 flex-shrink-0"
+                            title="Reject payment receipt with reason"
+                          >
+                            <Ban className="w-3.5 h-3.5 text-rose-600 stroke-[2.5]" />
+                            <span>Reject</span>
                           </button>
                         )}
 
@@ -1710,6 +1807,18 @@ export default function BarberDashboardPage() {
                           </button>
                         )}
 
+                        {appt.paymentStatus !== 'Verified' && (
+                          <button
+                            type="button"
+                            onClick={() => handleOpenRejectModal(appt, 'all')}
+                            className="inline-flex items-center justify-center gap-1 px-2.5 py-2 rounded-xl text-xs font-bold uppercase transition-all cursor-pointer border border-rose-200 bg-rose-50 text-rose-700 hover:bg-rose-100 flex-shrink-0"
+                            title="Reject payment receipt with reason"
+                          >
+                            <Ban className="w-3.5 h-3.5 text-rose-600 stroke-[2.5]" />
+                            <span>Reject</span>
+                          </button>
+                        )}
+
                         {/* View Receipt Button */}
                         {(appt.receiptPreview || appt.receiptFileName || appt.paymentMethod === 'cbe' || appt.paymentMethod === 'telebirr') && (
                           <button
@@ -1723,6 +1832,18 @@ export default function BarberDashboardPage() {
                           >
                             <Eye className="w-3.5 h-3.5 text-[#C88A22] group-hover:scale-110 transition-transform" />
                             <span className="text-xs font-extrabold text-[#8C4717]">Receipt</span>
+                          </button>
+                        )}
+
+                        {appt.paymentStatus !== 'Verified' && (
+                          <button
+                            type="button"
+                            onClick={() => handleOpenRejectModal(appt, 'all')}
+                            className="inline-flex items-center justify-center gap-1 px-2.5 py-2 rounded-xl text-xs font-bold uppercase transition-all cursor-pointer border border-rose-200 bg-rose-50 text-rose-700 hover:bg-rose-100 flex-shrink-0"
+                            title="Reject payment receipt with reason"
+                          >
+                            <Ban className="w-3.5 h-3.5 text-rose-600 stroke-[2.5]" />
+                            <span>Reject</span>
                           </button>
                         )}
 
@@ -2054,6 +2175,16 @@ export default function BarberDashboardPage() {
                             </button>
                           )
                         )}
+
+                        <button
+                          type="button"
+                          onClick={() => handleOpenRejectModal(activeReceiptModal, isAddTab ? 'additional' : 'original')}
+                          className="min-h-[42px] px-3.5 py-2 rounded-xl text-xs font-black uppercase tracking-wider transition-all cursor-pointer flex items-center justify-center gap-1.5 bg-rose-500/20 text-rose-300 border border-rose-500/40 hover:bg-rose-500/30 shadow-xs"
+                          title={`Reject ${isAddTab ? 'Additional' : 'Original'} Receipt with Reason`}
+                        >
+                          <Ban className="w-3.5 h-3.5 text-rose-400 stroke-[2.5]" />
+                          <span>Reject {isAddTab ? 'Additional' : 'Original'}</span>
+                        </button>
                       </div>
 
                       {/* Bottom Row: Verify Both Receipts + Close Button */}
@@ -2073,6 +2204,16 @@ export default function BarberDashboardPage() {
                             <span>Both Receipts Fully Verified ✓ ({fullPrice} ETB)</span>
                           </div>
                         )}
+
+                        <button
+                          type="button"
+                          onClick={() => handleOpenRejectModal(activeReceiptModal, 'all')}
+                          className="min-h-[44px] px-3.5 sm:px-4 py-2.5 rounded-xl border border-rose-500/50 bg-rose-500/15 text-xs font-black uppercase text-rose-300 hover:bg-rose-500/25 transition-all cursor-pointer flex items-center justify-center gap-1.5"
+                          title="Reject Entire Payment & Request Replacement"
+                        >
+                          <Ban className="w-4 h-4 text-rose-400 stroke-[2.5]" />
+                          <span>Reject All</span>
+                        </button>
 
                         <button
                           type="button"
@@ -2110,6 +2251,16 @@ export default function BarberDashboardPage() {
                             </span>
                           </>
                         )}
+                      </button>
+
+                      <button
+                        type="button"
+                        onClick={() => handleOpenRejectModal(activeReceiptModal, 'all')}
+                        className="min-h-[44px] px-3.5 sm:px-4 py-2.5 sm:py-3 rounded-xl sm:rounded-2xl border border-rose-500/50 bg-rose-500/15 text-xs font-black uppercase text-rose-300 hover:bg-rose-500/25 transition-all cursor-pointer flex items-center justify-center gap-1.5 shadow-sm"
+                        title="Reject payment screenshot with a specific reason"
+                      >
+                        <Ban className="w-4 h-4 text-rose-400 stroke-[2.5]" />
+                        <span>Reject Receipt</span>
                       </button>
 
                       {/* If service downgraded with cash change due */}
@@ -2159,6 +2310,158 @@ export default function BarberDashboardPage() {
           </div>
         );
       })()}
+
+      {/* ── Receipt Rejection Reason Modal ────────────────────── */}
+      {rejectModalAppt && (
+        <div className="fixed inset-0 z-[70] bg-black/85 backdrop-blur-sm flex items-center justify-center p-3 sm:p-4 animate-[fadeIn_0.2s_ease-out]">
+          <div className="bg-[#1C1714] text-white border-2 border-rose-500/70 rounded-3xl max-w-lg w-full p-5 sm:p-6 space-y-4 shadow-2xl relative">
+            {/* Header */}
+            <div className="flex items-start justify-between gap-3 border-b border-white/10 pb-3">
+              <div className="flex items-center gap-2.5">
+                <div className="w-10 h-10 rounded-xl bg-rose-500/20 border border-rose-500/40 flex items-center justify-center text-rose-400 flex-shrink-0">
+                  <Ban className="w-5 h-5 stroke-[2.5]" />
+                </div>
+                <div>
+                  <h3 className="text-sm sm:text-base font-extrabold uppercase font-['Cinzel',serif] tracking-wider text-white">
+                    Reject Payment Receipt
+                  </h3>
+                  <p className="text-xs text-[#C5B9AB]">
+                    Ref: <span className="font-mono font-bold text-[#E5A93C]">{rejectModalAppt.ref}</span> • {rejectModalAppt.customerName || rejectModalAppt.name}
+                  </p>
+                </div>
+              </div>
+              <button
+                type="button"
+                onClick={() => setRejectModalAppt(null)}
+                className="p-1.5 rounded-lg text-white/60 hover:text-white hover:bg-white/10 transition-colors cursor-pointer"
+              >
+                <X className="w-5 h-5" />
+              </button>
+            </div>
+
+            {/* Target Selector (if appointment has both receipts) */}
+            {(rejectModalAppt.additionalReceiptPreview || rejectModalAppt.additionalSubmittedAmount > 0) && (
+              <div className="space-y-1.5 text-left">
+                <label className="text-[11px] font-bold uppercase tracking-wider text-[#C5B9AB] block">
+                  Select Receipt to Reject:
+                </label>
+                <div className="grid grid-cols-3 gap-2 text-xs">
+                  <button
+                    type="button"
+                    onClick={() => setRejectTarget('all')}
+                    className={`py-2 px-2 rounded-xl font-bold border transition-all cursor-pointer ${
+                      rejectTarget === 'all'
+                        ? 'bg-rose-600 text-white border-rose-500 shadow-sm'
+                        : 'bg-white/5 text-white/70 border-white/10 hover:bg-white/10'
+                    }`}
+                  >
+                    Both Receipts
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => setRejectTarget('original')}
+                    className={`py-2 px-2 rounded-xl font-bold border transition-all cursor-pointer ${
+                      rejectTarget === 'original'
+                        ? 'bg-rose-600 text-white border-rose-500 shadow-sm'
+                        : 'bg-white/5 text-white/70 border-white/10 hover:bg-white/10'
+                    }`}
+                  >
+                    Original Only
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => setRejectTarget('additional')}
+                    className={`py-2 px-2 rounded-xl font-bold border transition-all cursor-pointer ${
+                      rejectTarget === 'additional'
+                        ? 'bg-rose-600 text-white border-rose-500 shadow-sm'
+                        : 'bg-white/5 text-white/70 border-white/10 hover:bg-white/10'
+                    }`}
+                  >
+                    Additional Only
+                  </button>
+                </div>
+              </div>
+            )}
+
+            {/* Quick Preset Reasons */}
+            <div className="space-y-1.5 text-left">
+              <label className="text-[11px] font-bold uppercase tracking-wider text-[#C5B9AB] block">
+                Select Common Reason (1-Click):
+              </label>
+              <div className="flex flex-wrap gap-1.5">
+                {PRESET_REJECTION_REASONS.map((r) => (
+                  <button
+                    key={r}
+                    type="button"
+                    onClick={() => setRejectReason(r)}
+                    className={`text-[10.5px] py-1 px-2.5 rounded-lg border transition-all text-left cursor-pointer ${
+                      rejectReason === r
+                        ? 'bg-rose-500/30 text-rose-200 border-rose-400 font-bold'
+                        : 'bg-white/5 text-white/70 border-white/10 hover:bg-white/10 hover:text-white'
+                    }`}
+                  >
+                    {r}
+                  </button>
+                ))}
+              </div>
+            </div>
+
+            {/* Reason Textarea (Customer-facing) */}
+            <div className="space-y-1.5 text-left">
+              <label className="text-[11px] font-bold uppercase tracking-wider text-[#C5B9AB] block">
+                Message Sent to Customer (Editable):
+              </label>
+              <textarea
+                rows={3}
+                value={rejectReason}
+                onChange={(e) => setRejectReason(e.target.value)}
+                placeholder="Type specific explanation for why this receipt is rejected..."
+                className="w-full bg-white/5 border border-white/15 focus:border-rose-400 rounded-xl p-3 text-xs text-white placeholder:text-white/30 outline-none transition-all ring-0 focus:ring-1 focus:ring-rose-400"
+              />
+              <p className="text-[10px] text-white/50 italic">
+                * This message immediately displays on the customer's page with a button to re-upload without page reload.
+              </p>
+            </div>
+
+            {/* Action Buttons */}
+            <div className="flex items-center gap-3 pt-2">
+              <button
+                type="button"
+                onClick={handleConfirmReject}
+                disabled={isRejecting || !rejectReason.trim()}
+                className="flex-1 py-3 px-4 rounded-xl bg-rose-600 hover:bg-rose-500 text-white font-extrabold text-xs uppercase tracking-wider transition-all disabled:opacity-50 cursor-pointer flex items-center justify-center gap-2 shadow-lg"
+              >
+                {isRejecting ? (
+                  <>
+                    <RotateCcw className="w-4 h-4 animate-spin" />
+                    <span>Rejecting Receipt...</span>
+                  </>
+                ) : (
+                  <>
+                    <Ban className="w-4 h-4 stroke-[2.5]" />
+                    <span>Confirm Rejection & Notify Customer</span>
+                  </>
+                )}
+              </button>
+              <button
+                type="button"
+                onClick={() => setRejectModalAppt(null)}
+                className="py-3 px-4 rounded-xl border border-white/15 text-xs font-bold text-white/80 hover:bg-white/10 transition-colors cursor-pointer"
+              >
+                Cancel
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Rejection Success Toast */}
+      {rejectSuccessToast && (
+        <div className="fixed bottom-6 left-1/2 -translate-x-1/2 z-50 bg-[#140F0C] text-[#FAF6F1] border-2 border-rose-500 px-5 py-3 rounded-2xl shadow-2xl flex items-center gap-2 text-xs font-bold animate-[slideUp_0.3s_ease-out]">
+          <Ban className="w-4 h-4 text-rose-400 flex-shrink-0" />
+          <span>{rejectSuccessToast}</span>
+        </div>
+      )}
 
       {/* ── Staff Footer ───────────────────────────────────────── */}
       <footer className="py-5 border-t border-[#E6DDD1] text-center text-xs text-[#8C7A6D] bg-white/60 backdrop-blur-xs mt-8">
